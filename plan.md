@@ -1,245 +1,217 @@
-# Personal Headless CMS — Implementation Plan
+# Content Admin (CMS): Implementation Plan
 
-> A lightweight, self-owned alternative to **Strapi**, built with **Next.js 16 (App Router)**, **Supabase** (Postgres + Auth) and **Cloudflare R2** (media storage).
+> A private admin website where you log in and manage your public website's content: **blog posts, news, success stories, testimonials, visa stamps and work permits**.
 >
-> **Status:** Draft v1 · **Date:** 2026-10-02 · Library versions and platform facts below were verified on this date — re-check versions at install time.
+> - Content is saved in **Supabase** and images in **Cloudflare R2**.
+> - Your website reads the published content **directly from Supabase**.
+>
+> **Status:** Draft v2 · **Date:** 2026-10-02. Library versions and platform facts were verified on this date; re-check versions when installing.
+>
+> **Replaces v1** of this plan, a general-purpose "Strapi alternative". v1 is still in git history (commit `1e9e734`).
 
 ---
 
 ## Table of contents
 
 1. [Summary](#1-summary)
-2. [Goals, non-goals & scope](#2-goals-non-goals--scope)
-3. [Research findings](#3-research-findings)
-4. [Key architecture decisions](#4-key-architecture-decisions)
+2. [Scope](#2-scope)
+3. [How it works](#3-how-it-works)
+4. [Key decisions](#4-key-decisions)
 5. [Tech stack](#5-tech-stack)
-6. [System architecture](#6-system-architecture)
-7. [Data model](#7-data-model)
-8. [Field types](#8-field-types)
-9. [Authentication & authorization](#9-authentication--authorization)
-10. [Media library on Cloudflare R2](#10-media-library-on-cloudflare-r2)
-11. [Public REST API](#11-public-rest-api)
-12. [Webhooks](#12-webhooks)
-13. [Admin UI](#13-admin-ui)
-14. [Project structure](#14-project-structure)
-15. [Configuration & environment variables](#15-configuration--environment-variables)
-16. [Implementation roadmap](#16-implementation-roadmap)
-17. [Testing strategy](#17-testing-strategy)
-18. [Deployment & operations](#18-deployment--operations)
-19. [Security checklist](#19-security-checklist)
-20. [Backlog (after v1)](#20-backlog-after-v1)
-21. [Risks & open questions](#21-risks--open-questions)
-22. [References](#22-references)
+6. [Database](#6-database)
+7. [Login & access control](#7-login--access-control)
+8. [Images on Cloudflare R2](#8-images-on-cloudflare-r2)
+9. [Rich-text editor](#9-rich-text-editor)
+10. [CMS screens](#10-cms-screens)
+11. [How the code works](#11-how-the-code-works)
+12. [Using the content on your website](#12-using-the-content-on-your-website)
+13. [Project structure](#13-project-structure)
+14. [Environment variables & config](#14-environment-variables--config)
+15. [Roadmap](#15-roadmap)
+16. [Testing](#16-testing)
+17. [Deployment & operations](#17-deployment--operations)
+18. [Security & privacy checklist](#18-security--privacy-checklist)
+19. [Later (backlog)](#19-later-backlog)
+20. [Open questions](#20-open-questions)
+21. [References](#21-references)
 
 ---
 
 ## 1. Summary
 
-We are building a headless CMS that keeps Strapi's core loop — **model content → edit content → upload media → consume it through a REST API** — with our own UI and a much smaller surface area.
+### 1.1 What you get
 
-**What v1 delivers**
-
-- **Login-only admin.** Supabase Auth with email + password. There is no sign-up, invite or forgot-password flow. Users are created manually in the Supabase dashboard.
-- **Content-Type Builder.** Collection types and single types, with 13 field types. Schemas are stored as data, so they can be edited safely in production.
-- **Content Manager.**
-  - List view with search, filters, sort, pagination and bulk actions.
-  - Edit forms generated from the schema.
-  - Draft & Publish with *draft / published / modified* states.
-- **Media Library.** Drag-and-drop multi-file upload straight from the browser to R2 using presigned URLs, alt text and captions, a reusable picker, and on-the-fly image resizing.
-- **Public REST API.**
-  - Strapi-style query parameters: `filters`, `sort`, `pagination`, `fields`, `populate`, `status`.
-  - API tokens (read-only / full-access).
-  - A per-type "public read" switch.
-- **Webhooks.** Signed with HMAC, retried on failure, and every delivery is logged. Strapi has none of these three.
-
-**The key decisions**
-
-- Content is stored as **JSONB documents**: the schema is data, not tables.
-- **One row per entry** holds both the draft and the published snapshot.
-- Data access goes through **Drizzle ORM over Supabase's connection pooler**, with Supabase's auto-generated REST API (the Data API) turned off.
-- **Server Actions** power the admin and **Route Handlers** power the public API.
-- Files are **uploaded directly to R2** with presigned URLs.
-
----
-
-## 2. Goals, non-goals & scope
-
-### Goals
-
-| # | Goal |
-|---|---|
-| G1 | Cover Strapi's *core* functionality for one owner and a few manually created admins. |
-| G2 | Our own UI/UX. This is not a visual clone of Strapi. |
-| G3 | Schema changes are safe in production: no redeploys, and no data loss when a field is renamed. |
-| G4 | Little to operate: runs on free or low tiers of Vercel, Supabase and Cloudflare. |
-| G5 | Secure by default: no public sign-up, a minimal attack surface, and every input validated. |
-
-### Non-goals for v1
-
-- Sign-up, invites, password reset, magic links and end-user (website member) accounts.
-- GraphQL, i18n and fine-grained RBAC.
-- Review workflows, releases, SSO, audit logs and a plugin marketplace.
-- Real-time collaboration and multi-tenancy.
-- A REST *write* API. It is in the backlog; the admin writes through Server Actions.
-
-### Scope: Strapi 5 feature → our decision
-
-Legend: ✅ in v1 · 🔁 simplified or replaced · ⏭ later · ❌ skip
-
-| Strapi feature | Decision | Phase |
+| Step | Screen | What happens |
 |---|---|---|
-| Collection types & single types | ✅ | 2 |
-| Field types: text, rich text, number, boolean, date/datetime, email, enumeration, UID, media, relation, JSON | ✅ 13 types, one rich-text format | 2–4 |
-| Password, biginteger, float, time-only fields | ❌ | — |
-| Components (single/repeatable) & dynamic zones | ⏭ right after launch | 8 |
-| Relations (6 kinds, bidirectional) | 🔁 "has one" / "has many", one-way; reverse lookups via filters | 2–3 |
-| Content Manager list (search, filters, sort, columns, bulk publish/unpublish/delete) | ✅ | 3 |
-| Edit view (generated form, field widths, entry title) | ✅ layout is configured in the builder | 3 |
-| Draft & Publish (draft/published/modified, discard draft) | ✅ | 3 |
-| Preview | ✅ simple preview link | 7 |
-| Content history, Releases, Review workflows | ⏭ history later; ❌ the others | — |
-| Media Library (upload, metadata, picker, search/filter/sort) | ✅ | 4 |
-| Pre-generated responsive formats | 🔁 replaced by on-the-fly Cloudflare transformations | 4 |
-| Media folders, crop/focal point, upload from URL | ⏭ | — |
-| REST read API (filters, populate, fields, sort, pagination, status) | ✅ Strapi-like | 5 |
-| REST write API | ⏭ | — |
-| GraphQL | ❌ | — |
-| API tokens (read-only, full-access, custom) | ✅ read-only + full-access; ⏭ custom | 5 |
-| Users & Permissions plugin (end users, Public role) | 🔁 only a "public read" switch per type | 5 |
-| Webhooks | ✅ plus signatures, retries and a delivery log | 6 |
-| Admin users, roles, RBAC | 🔁 Supabase users created manually; one role in v1 | 1 |
-| i18n | ⏭ | — |
-| SSO, audit logs, AI, MCP server, marketplace | ❌ | — |
+| 1 | **Login** (`/login`) | Email + password. This is the only page a visitor can open. There is no sign-up and no "forgot password"; you create users yourself in the Supabase dashboard. |
+| 2 | **Home** (`/`) | One card per content type, showing counts and an **Add** button. |
+| 3 | **List** (e.g. `/blog`) | Search, filter by Draft/Published, open, publish/unpublish, delete. |
+| 4 | **Editor** (e.g. `/blog/new`) | All the fields for that type: text, rich text with images, main image, dates, rating, country, … |
+| 5 | **Save draft / Publish** | The row is saved in that type's Supabase table. Its images are already in R2. |
+| 6 | **Your website** | Reads published rows with `supabase-js` and the publishable key. It cannot see drafts. |
+
+```mermaid
+flowchart LR
+  L["Login"] --> H["Home<br/>Add blog, news, …"] --> E["Editor<br/>fields + images"] --> S{"Save draft<br/>or Publish"}
+  S --> DB[("Supabase<br/>one table per type")]
+  E -->|"image upload"| R2[("Cloudflare R2")]
+  DB -->|"published rows only"| W["Your website"]
+  R2 -->|"image URLs"| W
+```
+
+### 1.2 The six content types
+
+**Blog** · **News** · **Success stories** · **Testimonials** · **Visa stamps** · **Work permits**. Each one is its own Postgres table. The fields are in [§6.2](#62-fields-per-table-proposed).
+
+### 1.3 The main decisions
+
+- **Six fixed tables with real columns**; there is no "content-type builder".
+- **Supabase Row Level Security (RLS) is the gatekeeper.** Visitors can read only published rows, and only admins on an allowlist can write.
+- **The CMS talks to Supabase as the logged-in admin.** There is no secret key on the server.
+- **Images are resized in the browser and uploaded straight to R2.** The row stores the image's URL, alt text, width and height.
+- **Rich text** is written in **Tiptap** and stored as **sanitized HTML**, so the website only has to render it.
+- **One config file describes all six types.** There is one generic list page and one generic editor.
+
+### 1.4 What changed from v1
+
+| v1 (Strapi alternative) | v2 (this plan) |
+|---|---|
+| Content types designed in the UI and stored as JSON documents | **Six fixed tables** with typed columns |
+| Drizzle ORM over a direct Postgres connection, with Supabase's auto-generated API (the Data API) off | **supabase-js + RLS**, with the Data API on |
+| Our own REST API, API tokens and webhooks | **None of these.** The website reads Supabase directly. |
+| Media library with reusable files | Images uploaded **inside the editor**: one main image per item, plus images inside rich text |
+| Separate draft and published copies of each entry | A simple **Draft / Published** status per row |
 
 ---
 
-## 3. Research findings
+## 2. Scope
 
-### 3.1 Strapi 5: what we replicate
+### In v1
 
-- **Structures.** Collection types (many entries), single types (exactly one entry), components (reusable field groups, single or repeatable) and dynamic zones (ordered lists of components). Components and dynamic zones come after launch.
-- **Draft & Publish semantics we copy.**
-  - **Draft** means never published. **Published** means no pending changes. **Modified** means published, with saved changes that aren't published yet.
-  - Actions are *Save*, *Publish*, *Unpublish* and *Discard changes*.
-  - Strapi checks only type, `maxLength`/`max` and enum membership on drafts. `required`, `min`/`minLength`, `regex`, `unique` and email format are checked only at publish.
-- **REST conventions we mirror.**
-  - Endpoints: `/api/:pluralApiId`, `/api/:pluralApiId/:id`, and `/api/:singularApiId` for single types.
-  - Query string: `filters[field][$op]=…` with `$eq $ne $lt $lte $gt $gte $in $notIn $contains $containsi $startsWith $endsWith $null $notNull $between $or $and $not`, plus `sort=a:asc,b:desc`.
-  - Pagination: `pagination[page|pageSize]` (default 25, max 100) or `pagination[start|limit]`.
-  - Also `fields[]`, `populate` (`*`, arrays, objects) and `status=draft|published`.
-  - Response shape: `{ data, meta: { pagination } }`. Errors: `{ data: null, error: { status, name, message, details } }`.
-- **API tokens.** Read-only, full-access and custom. Durations are 7, 30 or 90 days, or unlimited. Tokens are stored as HMAC hashes, shown once, and track "last used".
-- **Webhooks.** A name, URL, headers and events. Events: `entry.create|update|delete|publish|unpublish` and `media.create|update|delete`. Payload: `{ event, createdAt, model, entry }`. Strapi sends with a 10 s timeout, never retries and does not sign.
-- **Naming.** The display name produces kebab-case singular and plural API IDs. Strapi reserves `id`, `documentId`, `createdAt`, `updatedAt`, `publishedAt`, `locale`, `status`, `meta` and more.
+- **Login and logout** with email and password. Only users on the **admin allowlist** get in.
+- **Home dashboard** with counts and quick **Add** buttons.
+- **For each content type:** a list (search, status filter, pagination), plus create, edit, delete and publish/unpublish.
+- **Editor:**
+  - auto-generated URL slugs;
+  - rich text with inline images;
+  - main-image upload with progress and alt text;
+  - clear validation errors;
+  - an unsaved-changes warning;
+  - an edit-conflict warning;
+  - a "View on website" link.
+- **Images:** resized in the browser and uploaded straight to R2. Replaced or deleted main images are removed from R2.
+- **Database rules (RLS):** the website, or anyone holding the publishable key, can read only **published** content, and only admins can write.
+- **For your website:** a guide with copy-paste queries and generated TypeScript types, plus an optional "refresh the website" ping after each save.
 
-### 3.2 Strapi pain points we design around
+### Not in v1 (see [§19](#19-later-backlog))
 
-1. **Schema edits only work in dev mode**, and the boot-time database sync silently drops columns. Renaming a field loses its data.
-   → Our schema is data. Edits work in production, and each one runs as one non-destructive transaction that keeps renamed fields' data.
-2. **Draft and published are two DB rows with different IDs.** → One row and one ID per entry.
-3. **Validation fails late, at publish time.** → Type and uniqueness checks run on every save.
-4. **Nothing is populated by default in the API.** → Media is always populated; relations are opt-in.
-5. **Webhooks are unsigned and never retried.** → HMAC signatures, retries and a delivery log.
-6. **Image sizes are pre-generated at upload.** → Images are resized on the fly at the CDN.
-7. **Strapi needs a separate server.** → Everything is one Next.js app, and Server Components call the services in-process.
-
-### 3.3 Next.js 16.3 (read from `node_modules/next/dist/docs`)
-
-- **`proxy.ts` replaces `middleware.ts`.**
-  - It lives at `src/proxy.ts`, exports `proxy`, and always runs on the Node.js runtime.
-  - The docs position it for *optimistic* checks only.
-  - Server Actions are POSTs to the route that uses them, so a matcher change can silently drop coverage. **Every Server Action must check auth itself.**
-- **Request APIs are async-only:** `await params`, `await searchParams`, `await cookies()`. The generated global types `PageProps<'/route'>`, `LayoutProps` and `RouteContext` come from `next typegen`, `dev` or `build`.
-- **Caching.**
-  - `cacheComponents` is opt-in. It enables `use cache` and partial prerendering, and requires `<Suspense>` around request-time data.
-  - Without it, GET Route Handlers are not cached and pages that read cookies are dynamic. That is exactly what an auth-gated admin needs.
-  - `revalidateTag(tag, 'max')` now requires a cache profile.
-  - `updateTag()` gives read-your-own-writes and only works in Server Actions.
-  - `refresh()` re-renders the current route.
-- **Server Actions.**
-  - They have a built-in CSRF origin check.
-  - The body limit is **1 MB** (`experimental.serverActions.bodySizeLimit`).
-  - A client dispatches them **one at a time**, so batch work (e.g. presign 20 files in one call).
-- **`after()`** schedules work after the response is sent. We use it for webhooks and token "last used" updates.
-- **Tooling.**
-  - Turbopack is the default bundler.
-  - `next lint` was removed; use Biome or ESLint directly.
-  - Node ≥ 20.9 is required.
-  - `typedRoutes` is stable.
-- **`next/image`.**
-  - `images.domains` is deprecated; use `remotePatterns`, which accepts `new URL()`.
-  - The default `qualities` is `[75]` and the default `minimumCacheTTL` is 4 h.
-  - A custom `loaderFile` must be a `'use client'` module.
-
-### 3.4 Supabase (October 2026)
-
-- **API keys.** Projects created after 2025-11-01 only get `sb_publishable_…` (safe for the browser) and `sb_secret_…` (server-only, bypasses RLS). The legacy `anon` and `service_role` keys are being removed.
-- **SSR auth with `@supabase/ssr` 0.12.**
-  - `createServerClient` takes cookie `getAll`/`setAll`. `setAll` also receives no-cache headers that must be forwarded.
-  - Trust **`getClaims()`**: it verifies the JWT, locally against the JWKS when asymmetric signing keys are used, which is the default for new projects since Oct 2025.
-  - Never trust `getSession()` on the server.
-- **Login-only works as needed.**
-  - Turning off *"Allow new users to sign up"* blocks only sign-up; `signInWithPassword` keeps working.
-  - In the dashboard, *Users → Add user → Create new user* auto-confirms the user and sends no email.
-- **Email.** The built-in SMTP only delivers to members of your Supabase team. Password resets for admins are therefore done by the owner via the admin API or a script, which fits "login only".
-- **Login rate limit.** Password logins share the `/token` limiter: 150 requests per 5 min per IP. Our login runs server-side, so every attempt comes from the server's IP. Turnstile CAPTCHA is available if abuse appears.
-- **The Data API (PostgREST) can't do what we need** without writing Postgres functions:
-  - copy one column into another (that is what publish does);
-  - cast values inside filters;
-  - run multi-statement transactions.
-
-  We therefore use SQL through Drizzle.
-- **Driver.**
-  - Supabase warns that postgres.js query pipelining can hang or mismatch rows on the transaction pooler. Use **`pg` (node-postgres)** with `drizzle-orm/node-postgres`, plus `attachDatabasePool` on Vercel.
-  - The direct DB host is IPv6-only. Use Supavisor instead: port 6543 (transaction mode) at runtime and 5432 (session mode) for tooling.
-- **Drizzle version.** Stay on `drizzle-orm` 0.45 and `drizzle-kit` 0.31. The v1 release candidate changed the migration folder layout and dropped `migrations.prefix: 'supabase'`, so the Supabase CLI would ignore its output.
-- **Data API exposure.** New tables are no longer auto-granted to the API roles: this has been the default for new projects since 2026-05-30, and applies to all projects from 2026-10-30. We turn the Data API **off** and keep RLS on as a second line of defence.
-- **Free tier.** 500 MB database, the project pauses after about 7 days of low activity, and there are **no backups**. Use Pro ($25/mo) in production.
-
-### 3.5 Cloudflare R2
-
-- **Endpoint.** S3-compatible at `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`; EU-jurisdiction buckets use `.eu.` in the host. Region is `auto`.
-- **Checksum flags.** AWS SDK v3's default checksums put an *empty-body CRC32* into presigned URLs. Set `requestChecksumCalculation` and `responseChecksumValidation` to `'WHEN_REQUIRED'`.
-- **What the presigner signs.**
-  - It does **not** sign `Content-Type` unless you pass `signableHeaders: new Set(['content-type'])`.
-  - A supplied `ContentLength` **is** signed, which forces an exact-size upload.
-  - R2 has no presigned POST, so there is no `content-length-range` policy.
-- **Browser uploads.** They need a bucket CORS rule allowing PUT with `Content-Type` and exposing `ETag`. Upload progress requires `XMLHttpRequest`; `fetch` can't report upload progress.
-- **Public reads in production.**
-  - Use a **custom domain**; the zone must be in the same Cloudflare account. `r2.dev` is rate-limited and meant for development only.
-  - Deleting an object does **not** purge the CDN. Purge the URL through the API; that also purges its `/cdn-cgi/image` variants.
-- **Image Transformations** on the custom domain use URLs like `/cdn-cgi/image/width=800,format=auto/<key>`. The first 5,000 unique transformations per month are free. After that it costs $0.50 per 1,000 on paid plans; on the free plan new variants fail with error 9422.
-- **Pricing.** Free tier is 10 GB-month of storage, 1M Class A and 10M Class B operations per month, and **egress is always free**. Enabling R2 requires a payment method.
-- **Security.** Never serve user-uploaded SVG or HTML as-is (stored XSS risk). Keep media on its own hostname and send `X-Content-Type-Options: nosniff`.
-
-### 3.6 Admin UI ecosystem
-
-- **shadcn/ui CLI v4** defaults to **Base UI** primitives; Radix is still supported. It has new `Field` and `InputGroup` components, an async `Combobox` that suits the relation picker, and `Sidebar` blocks.
-- **Forms: react-hook-form 7 + Zod 4.** `@hookform/resolvers` 5.x supports Zod 4. This is the best fit for nested forms generated at runtime; RHF v8 is still in beta.
-- **Rich text: Tiptap 3** (MIT) stores JSON. `@tiptap/static-renderer` renders HTML on the server without a DOM.
-- **Tables: TanStack Table v9** is stable (Aug 2026) and safe with the React Compiler.
-- **Drag and drop: `@dnd-kit/react` 0.5** is the maintained dnd-kit line. It is pre-1.0, so pin the exact version.
-- **Dark mode.** `next-themes` is unmaintained and logs a dev warning on React 19 with Next 16.2+. Use the inline-script theme pattern from the Next.js docs instead.
-- **Query strings.** Use `qs` ≥ 6.14.2 (it contains DoS fixes), with strict limits, to parse Strapi-style query strings.
-- **Testing and linting.** Vitest 5 (needs Node ≥ 22.12), Playwright 1.63 and Biome 2.5. Biome avoids today's peer conflicts between ESLint 10 / TypeScript 7 and `eslint-config-next`.
+- Sign-up, invitations, password-reset emails and user-management screens. Use the Supabase dashboard instead.
+- Roles: every admin can do everything.
+- Creating content types or fields from the UI. A new field is one migration plus one line of config ([§6.7](#67-changing-the-schema-later)).
+- A media library, image galleries (several images per item), and video uploads. Paste a YouTube link instead.
+- Multiple languages, revision history, and previewing drafts on the website.
 
 ---
 
-## 4. Key architecture decisions
+## 3. How it works
 
-| # | Decision | Why | Trade-off → mitigation |
+### 3.1 Architecture
+
+```mermaid
+flowchart LR
+  subgraph ADMIN["Admin's browser"]
+    UI["CMS pages<br/>React 19 + shadcn/ui"]
+  end
+  subgraph CMS["CMS: Next.js 16 on Vercel<br/>cms.example.com"]
+    PX["proxy.ts<br/>refresh session, send guests to /login"]
+    RSC["Server Components<br/>home, lists, editor"]
+    SA["Server Actions<br/>save, publish, delete, upload URL"]
+  end
+  subgraph SB["Supabase"]
+    AUTH["Auth<br/>email + password"]
+    REST["Data API + RLS"]
+    DB[("Postgres<br/>6 content tables + admins")]
+  end
+  subgraph CF["Cloudflare"]
+    R2[("R2 bucket")]
+    CDN["media.example.com"]
+  end
+  SITE["Your website<br/>www.example.com"]
+  V["Visitors"]
+
+  UI -->|"sign in"| AUTH
+  UI --> PX --> RSC
+  UI --> SA
+  RSC -->|"admin session"| REST
+  SA -->|"admin session"| REST
+  REST --> DB
+  SA -->|"presign, check, delete"| R2
+  UI -->|"PUT image"| R2
+  CDN --> R2
+  SITE -->|"publishable key:<br/>published rows only"| REST
+  V --> SITE
+  V -->|"images"| CDN
+  SA -.->|"optional refresh ping"| SITE
+```
+
+- **CMS:** a Next.js app on its own subdomain. It holds no database password and no Supabase secret key. It only needs the R2 upload credentials.
+- **Supabase:** stores the content and runs the login. The **Data API** (PostgREST) serves both the CMS (as the admin) and the website (as an anonymous visitor). RLS decides what each one may see or change.
+- **Cloudflare R2:** stores the images. They are served from `media.example.com` through Cloudflare's CDN.
+
+### 3.2 Who can do what
+
+Postgres enforces this; the CMS code only adds friendlier checks on top.
+
+| Who | Connects with | Can read | Can write |
 |---|---|---|---|
-| D1 | **Store content as JSONB documents.** Content-type schemas are rows, not tables. | Schemas can be edited in production with no DDL. A rename is a single `UPDATE`, and draft/published snapshots are trivial. | The database doesn't type-check fields → every write is validated with a Zod schema generated from the content type. GIN and expression indexes keep queries fast. |
-| D2 | **One row per entry** with `draft_data` and `published_data`. | Publishing is atomic (`published_data = draft_data`). There is one stable ID, and status comes from a generated column. | Two copies per row → negligible at CMS scale. |
-| D3 | **Drizzle ORM 0.45 + `pg` over the Supavisor pooler.** supabase-js is used only for Auth, and the Data API is off. | We need SQL that PostgREST can't express: column copies, casts, transactions and advisory locks. It also shrinks the attack surface. | Authorization lives entirely in our server code → a single Data Access Layer (DAL) with tests. |
-| D4 | **Admin = Server Actions; public API = Route Handlers.** Both call one shared service layer. | Next-native and CSRF-protected, with no admin REST API to secure. | Actions run one at a time per client → batch operations. |
-| D5 | **Browsers upload directly to R2** with presigned PUT URLs. | Avoids Vercel's 4.5 MB body limit and the 1 MB Server Action limit, and uses no server bandwidth. | Needs bucket CORS → plus a finalize step that verifies the file with `HeadObject`. |
-| D6 | **Resize images on the fly** with Cloudflare Image Transformations. | No variant pipeline and no extra storage; any size on demand. | Free quota is 5k unique variants per month → fall back to the original URL or `next/image`. |
-| D7 | **Store relations and media as ID(s) inside the document.** | Works naturally with snapshots: a published snapshot keeps the relations it had. No join tables. | No foreign-key integrity → missing targets are dropped when reading, and media deletes warn which entries use the file. |
-| D8 | **API populates media by default; relations need `populate`; components are inline.** | Fixes Strapi's most common API annoyance without bloating payloads. | Differs from Strapi → documented. |
-| D9 | **Drafts get type and uniqueness checks; publish gets full validation.** | Drafts can be incomplete, but conflicts surface early. | — |
-| D10 | **No `cacheComponents` in v1.** | The admin is 100% per-user and dynamic, and this avoids wrapping everything in Suspense. | The API isn't cached on the server → consumer sites cache their reads and refresh on webhooks; revisit later. |
-| D11 | **Login-only auth** with users created in the Supabase dashboard, mirrored into a `profiles` table that has an `is_active` switch. | Matches the requirement. Deactivation takes effect immediately rather than waiting up to 1 h for the JWT to expire. | Passwords are changed by the owner → via the admin API or a script. |
+| Your website / any visitor | publishable key, no login | rows with `status = 'published'` and `published_at <= now()` | nothing |
+| **Admin** (listed in `admins`) | publishable key + their login session | everything, drafts included | the six content tables |
+| A logged-in user **not** in `admins` | publishable key + session | the same as a visitor | nothing |
+| You, in the Supabase dashboard or CLI | database owner | everything | everything |
+
+### 3.3 Saving an item with an image
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (CMS editor)
+  participant S as CMS server (Server Actions)
+  participant R as Cloudflare R2
+  participant D as Supabase (Postgres + RLS)
+  participant W as Your website
+  B->>B: Choose image, resize to 2000 px max, WebP or JPEG, strip EXIF
+  B->>S: createUploadUrl(collection, type, size)
+  S->>S: requireAdmin, check type and size, generate key
+  S-->>B: presigned PUT URL (5 min) + public URL
+  B->>R: PUT image (progress bar)
+  B->>B: Show preview; admin fills alt text and the other fields
+  B->>S: saveItem(values, status = published)
+  S->>S: requireAdmin, Zod validation, sanitize HTML, HeadObject check
+  S->>D: insert or update with the admin's session
+  D->>D: RLS: is the caller in admins?
+  D-->>S: saved row (id, updated_at)
+  S-->>B: ok, then toast "Published"
+  S--)R: after response: delete the replaced image
+  S--)W: after response (optional): POST /api/revalidate
+```
+
+---
+
+## 4. Key decisions
+
+| # | Decision | Why | Trade-off |
+|---|---|---|---|
+| D1 | **Six real tables with typed columns.** No generic content engine. | Exactly what you need. Easy to query from the website, and `supabase gen types` gives full TypeScript types. | A new field needs a small migration plus one config line, about 10 minutes. |
+| D2 | **The CMS uses supabase-js with the logged-in admin's session, and RLS decides what is allowed.** There is no secret key on the server. | The database itself enforces "only admins write, the public sees only published content", even if app code has a bug. It is the same access path the website uses, and there is one less secret to leak. | No multi-statement transactions. They aren't needed: every save touches one row. |
+| D3 | **An admin allowlist** (the `admins` table plus `private.is_admin()`), with sign-ups switched off. | Being logged in is not the same as being an admin. This keeps you safe if you later add user accounts to the website in the same Supabase project. | One extra SQL line when you create an admin. |
+| D4 | **Every table has a Draft/Published `status` and a `published_at`.** The website only sees published rows whose date has passed. | Unfinished work never reaches the website, and backdating or scheduling come for free. | Editing a *published* item changes the live site as soon as you save. There is no separate draft copy. |
+| D5 | **Images go from the browser straight to R2 through a presigned URL, resized and re-encoded in the browser first.** | Avoids Vercel's 4.5 MB request limit and makes pages fast. Re-encoding also removes GPS/EXIF data from phone photos. | Safari (Mac and iPhone) can't encode WebP, so images uploaded from Safari are saved as JPEG. They are still resized and EXIF-free. |
+| D6 | **The main image is stored as four columns:** `image_url`, `image_alt`, `image_width`, `image_height`. | The website gets everything from one row, fully typed and with no joins. Width and height prevent layout shift. | If the media domain ever changes, run one SQL `replace()`. |
+| D7 | **Rich text is written in Tiptap, saved as HTML and sanitized on the server** before it is stored. | The website renders it in one line and needs no editor libraries. | HTML is less structured than JSON, which is fine for articles. |
+| D8 | **One config file describes the six content types**, so there is one generic list, editor and set of actions. | Six types for the cost of one, and adding a field is one line. | A type with unusual UI needs a custom field component. |
+| D9 | **SQL migrations go in `supabase/migrations/`, applied with the Supabase CLI**, and types are generated from the database. | A reproducible database, and the same types in the CMS and on the website. | You need the CLI, which installs as a dev dependency. |
+| D10 | **The browser signs in with the Supabase client; access checks run on the server.** | Supabase limits `/auth/v1/token`, used for both sign-in and token refresh, to **150 requests per 5 min per IP**. If login ran on our server, every attempt (an attacker's too) would come from the server's IP, so a flood of bad logins could lock real admins out. | — |
+| D11 | **CMS pages are never cached.** The website does its own caching, refreshed on a timer and by an optional ping. | Admins always see the latest data, and there is nothing to invalidate in the CMS. | — |
 
 ---
 
@@ -249,549 +221,507 @@ Versions as of 2026-10-02.
 
 | Layer | Choice | Version | Notes |
 |---|---|---|---|
-| Runtime | Node.js LTS | 24 (min 22.12) | Vitest 5, jsdom and react-dropzone need ≥ 22 |
-| Framework | Next.js (App Router, Turbopack) + React | 16.3.8 / 19.2 | already installed |
-| Language | TypeScript (strict) | 5.x | already installed |
-| Styling | Tailwind CSS | 4.x | already installed |
-| UI kit | shadcn/ui (CLI v4, **Base UI** primitives) + lucide-react | 4.21 / 1.x | generated into `src/components/ui` |
-| Forms | react-hook-form + @hookform/resolvers + Zod | 7.89 / 5.9 / 4.6 | one schema builder shared by client and server |
-| Tables | @tanstack/react-table | 9.2 | server-side mode |
-| URL state | nuqs | 2.10 | list filters, sort and pagination in the URL |
-| Drag & drop | @dnd-kit/react + @dnd-kit/helpers | 0.5.0 (pin) | field ordering, repeatables |
-| Rich text | Tiptap (StarterKit + Image) + @tiptap/static-renderer | 3.31 | JSON stored, HTML served |
-| JSON editor | @uiw/react-codemirror + @codemirror/lang-json | 4.25 | lazy-loaded |
-| Dates | date-fns + @date-fns/tz; react-day-picker | 4.4; **9.14 (pin)** | pin until shadcn's Calendar supports v10 |
-| Slugs | @sindresorhus/slugify | 3.x | good transliteration (Polish, German, …) |
-| File drop | react-dropzone (+ XHR for progress) | 20.x | |
-| Auth | @supabase/ssr + @supabase/supabase-js | 0.12.7 / 2.117 | auth only |
-| Database | Supabase Postgres 17; drizzle-orm (node-postgres) + pg; drizzle-kit | 0.45.3 / 8.23 / 0.31.11 | do **not** use the 1.0 RC yet |
-| Pooling helper | @vercel/functions (`attachDatabasePool`) | 3.9 | Vercel Fluid compute |
-| Object storage | @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner | 3.x | pointed at R2 |
-| Query strings | qs | ≥ 6.16 | strict limits |
-| Utilities | server-only, nanoid, pluralize | — | |
-| Tests | Vitest + Testing Library; Playwright | 5.0 / 16.3; 1.63 | |
-| Lint/format | Biome | 2.5 (pin) | `next lint` no longer exists |
-| DB tooling | Supabase CLI (+ Docker for the local stack) | 2.119 | migrations, local Postgres + Auth |
-| Hosting | Vercel (Fluid compute), or any Node host / Docker | — | |
+| Runtime | Node.js LTS | 24 (minimum 22.12, required by sanitize-html) | pin it with `.nvmrc`; choose Node 24.x in Vercel |
+| Framework | Next.js (App Router, Turbopack) + React | 16.3.8 / 19.2.8 | already installed |
+| Language & styling | TypeScript (strict), Tailwind CSS | 5.x / 4.x | already installed |
+| UI kit | shadcn/ui (CLI v4, Base UI primitives) + lucide-react + sonner (toasts) | 4.21 / 1.50 / 2.0 | components are copied into `src/components/ui` |
+| Forms | react-hook-form + @hookform/resolvers + zod | 7.89 / 5.9 / 4.6 | the same Zod schemas run in the browser and on the server |
+| Supabase | @supabase/supabase-js + @supabase/ssr | 2.117 / 0.12.7 | cookies-based sessions for Next.js |
+| DB tooling | Supabase CLI (`supabase` npm dev dependency) | 2.119 | migrations and type generation |
+| Images | @aws-sdk/client-s3 + @aws-sdk/s3-request-presigner | 3.1145 | R2 speaks the S3 API |
+| Rich text | Tiptap 3: `@tiptap/react`, `@tiptap/pm`, `@tiptap/starter-kit`, `@tiptap/extension-image`, `@tiptap/extensions`, `@tiptap/extension-file-handler` | 3.31 (≥ 3.30.5 for security fixes) | MIT licensed |
+| HTML cleaning | sanitize-html (+ @types/sanitize-html) | 2.18 | server only; tested with Next 16.3.8 + Turbopack, no extra config |
+| Slugs | @sindresorhus/slugify | 3.0 | transliterates letters such as ł, ą, ü |
+| Tests | Vitest, Playwright | 5.0 / 1.63 | |
+| Lint and format | Biome | 2.5 | `next lint` no longer exists |
+| Hosting | Vercel | — | CMS at `cms.example.com` |
+
+Dropped from v1: Drizzle, `pg`, TanStack Table, nuqs, dnd-kit, CodeMirror, `qs` and react-dropzone. Dates are formatted with the built-in `Intl` APIs.
 
 ---
 
-## 6. System architecture
+## 6. Database
 
-### 6.1 Overview
+### 6.1 Tables at a glance
 
-```mermaid
-flowchart LR
-  subgraph Browser
-    UI["Admin UI<br/>React 19 + shadcn/ui"]
-  end
-  subgraph App["Next.js 16 app (Vercel or Node)"]
-    PX["proxy.ts<br/>session refresh + /admin guard"]
-    RSC["Server Components<br/>admin pages"]
-    SA["Server Actions<br/>admin mutations"]
-    API["Route Handlers<br/>public REST /api/*"]
-    SVC["Service layer<br/>validation, query engine, events"]
-  end
-  subgraph Supabase
-    AUTH["Supabase Auth"]
-    PG[("Postgres 17<br/>content_types, entries, media,<br/>api_tokens, webhooks")]
-  end
-  subgraph Cloudflare
-    R2[("R2 bucket")]
-    CDN["media.example.com<br/>CDN + Image Transformations"]
-  end
-  SITE["Your websites and apps"]
-  HOOK["Webhook receivers"]
+| Table | Used on the website for | Slug (own page) | Rich text | Main image | Featured flag |
+|---|---|---|---|---|---|
+| `blog` | article list + article pages | ✅ | ✅ `content` | cover, optional | — |
+| `news` | news list + news pages | ✅ | ✅ `content` | cover, optional | — |
+| `success_stories` | story list + story pages | ✅ | ✅ `content` | photo, optional | ✅ |
+| `testimonials` | quotes / carousel | — | — | photo, optional | ✅ |
+| `visa_stamps` | gallery of approved visas | — | — | **image, required** | — |
+| `work_permits` | gallery of issued work permits | — | — | **image, required** | — |
+| `admins` | nothing (CMS access list) | | | | |
 
-  UI -->|pages| PX --> RSC --> SVC
-  UI -->|forms| SA --> SVC
-  UI -->|presigned PUT| R2
-  UI -->|images| CDN
-  CDN --> R2
-  RSC -.->|getClaims| AUTH
-  SA -.->|signInWithPassword| AUTH
-  SVC -->|Drizzle + pg via Supavisor| PG
-  SVC -->|S3 API: presign, head, delete| R2
-  SITE -->|Bearer token| API --> SVC
-  SITE -->|img src| CDN
-  SVC -->|signed POST, after response| HOOK
-```
+Every content table has these **standard columns**:
 
-### 6.2 Layers and rules
-
-| Layer | Location | Rules |
+| Column | Type | Notes |
 |---|---|---|
-| Pages | `src/app/**` | Thin. Call the DAL and services, then render. Pass plain DTOs (no DB rows) to Client Components. |
-| Server Actions | `src/actions/*.ts` (`'use server'`) | Always `requireUser()` → Zod-parse the input → call a service → `refresh()`/`revalidatePath()` → return an `ActionResult`. |
-| Services | `src/server/services/*` (`import 'server-only'`) | Own the business rules, transactions and event emission. Called by both actions and API handlers. |
-| Public API plumbing | `src/server/api/*` | Token auth, query parsing and compilation, serialization. Never imports admin UI code. |
-| Shared (isomorphic) | `src/lib/**` | Field definitions, the `buildEntrySchema()` validator builder, naming rules, URL helpers. Used by forms in the browser *and* by the server. |
+| `id` | `uuid` primary key | `gen_random_uuid()` |
+| `status` | enum `content_status` | `'draft'` (default) or `'published'` |
+| `published_at` | `timestamptz` | Set automatically the first time the item is published. You can edit it to backdate, or set a future date to schedule. |
+| `created_at`, `updated_at` | `timestamptz` | `updated_at` is set by a trigger on every update. It also detects edit conflicts. |
+| `image_url`, `image_alt`, `image_width`, `image_height` | `text`, `text`, `integer`, `integer` | The main image, in every table |
 
-All Server Actions return the same shape:
+### 6.2 Fields per table (proposed)
 
-```ts
-type ActionResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
-```
+> **Please confirm or adjust these fields before Phase 1.** They are a sensible starting point for a visa and work-permit agency site. Changing them later is easy ([§6.7](#67-changing-the-schema-later)), but renaming a column also means updating the website.
 
-### 6.3 Request flows
+**Required**:
+- **Always:** needed even to save a draft.
+- **Publish:** needed before publishing.
+- **Blank:** optional.
 
-**A. Admin page render**
-1. `proxy.ts` refreshes the Supabase session cookie. With no session it redirects to `/login?next=…`.
-2. The page (a Server Component) calls `requireUser()`, which runs `getClaims()` and checks for an active `profiles` row.
-3. The page loads data through services and hands DTOs to Client Components (tables, forms).
+**`blog`**
 
-**B. Admin mutation**
-1. The client form (react-hook-form) validates with the shared Zod schema, then calls a Server Action with a plain object.
-2. The action runs `requireUser()`, validates again on the server, and calls the service, which runs a transaction.
-3. The action calls `refresh()` so the current route re-renders in the same round trip, then returns its result.
-4. The service emits a domain event, and `after()` delivers webhooks once the response has gone out.
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `title` | text ≤ 200 | Always | Text | |
+| `slug` | text, unique | Always | Slug | Generated from the title; used in `/blog/<slug>` |
+| `excerpt` | text ≤ 300 | Publish | Textarea | Shown on cards and as the meta description |
+| `content` | text (HTML) | Publish | Rich text | |
+| `image_*` | — | | Image ("Cover image") | |
+| `author_name` | text ≤ 100 | | Text | |
+| `tags` | text[] (≤ 10) | | Tags | e.g. `work-visa`, `poland` |
+| `seo_title` | text ≤ 70 | | Text (SEO section) | Falls back to `title` |
+| `seo_description` | text ≤ 160 | | Textarea (SEO section) | Falls back to `excerpt` |
 
-**C. Public API request**
-1. Example: `GET /api/articles?filters[slug][$eq]=hello&populate=*`.
-2. Resolve the content type from the API ID, authenticate the caller (Bearer token or public), and check the action is allowed.
-3. Parse with `qs` (strict limits), validate with Zod, and compile to SQL with whitelisted fields and typed casts.
-4. Serialize: published snapshot → private fields removed → media and relations populated in batches → JSON with CORS and cache headers.
+**`news`**
 
-**D. Media upload** (details in [§10.2](#102-upload-flow))
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `title` | text ≤ 200 | Always | Text | |
+| `slug` | text, unique | Always | Slug | `/news/<slug>` |
+| `excerpt` | text ≤ 300 | Publish | Textarea | |
+| `content` | text (HTML) | Publish | Rich text | |
+| `image_*` | — | | Image ("Cover image") | |
+| `source_url` | text (URL) | | URL ("Source link") | e.g. the official announcement |
+| `seo_title`, `seo_description` | text ≤ 70 / ≤ 160 | | SEO section | |
 
-```mermaid
-sequenceDiagram
-  autonumber
-  participant B as Browser (admin)
-  participant S as Server Action
-  participant R as R2
-  participant D as Postgres
-  B->>S: createUploadUrls(files: name, type, size)
-  S->>S: requireUser, MIME allowlist, size limit, generate keys
-  S-->>B: key + presigned PUT URL per file (5 min, signed type and length)
-  loop each file (max 4 in parallel)
-    B->>R: PUT file via XHR with progress events
-    R-->>B: 200 OK + ETag
-  end
-  B->>S: finalizeUploads(keys + names + dimensions)
-  S->>R: HeadObject per key, verify size and type
-  S->>D: insert media rows
-  S-->>B: media DTOs, grid updates
-```
+**`success_stories`**
 
-**E. Webhook delivery.** Service `emit()` → `after()` → load enabled webhooks subscribed to the event → POST signed JSON (10 s timeout, up to 3 attempts) → write a row to `webhook_deliveries`.
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `title` | text ≤ 200 | Always | Text | e.g. "From Kathmandu to Wrocław in 9 weeks" |
+| `slug` | text, unique | Always | Slug | `/success-stories/<slug>` |
+| `person_name` | text ≤ 100 | Publish | Text | A first name is enough |
+| `country` | text ≤ 60 | | Country | Destination country |
+| `job_title` | text ≤ 100 | | Text | e.g. "Welder" |
+| `excerpt` | text ≤ 300 | Publish | Textarea | |
+| `content` | text (HTML) | Publish | Rich text | The story |
+| `image_*` | — | | Image ("Photo") | |
+| `video_url` | text (URL) | | URL | A YouTube or Vimeo link |
+| `is_featured` | boolean | | Switch | Show on the home page |
 
----
+**`testimonials`**
 
-## 7. Data model
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `name` | text ≤ 100 | Always | Text | |
+| `job_title` | text ≤ 100 | | Text | e.g. "Warehouse operator, Poznań" |
+| `country` | text ≤ 60 | | Country | |
+| `quote` | text ≤ 1000 | Publish | Textarea | Plain text; line breaks are kept |
+| `rating` | smallint 1–5 | | Rating | |
+| `image_*` | — | | Image ("Photo") | |
+| `video_url` | text (URL) | | URL | For video testimonials |
+| `is_featured` | boolean | | Switch | |
 
-### 7.1 Tables
+**`visa_stamps`**
 
-The model is implemented as a Drizzle schema in `src/server/db/schema.ts`. `drizzle-kit generate` writes the SQL migrations into `supabase/migrations/`. The SQL below shows the intended result.
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `image_*` | — | Always | Image ("Visa stamp") | Blur personal data first ([§8.7](#87-privacy)) |
+| `country` | text ≤ 60 | Always | Country | |
+| `visa_type` | text ≤ 100 | | Text | e.g. "National visa (D), work" |
+| `person_name` | text ≤ 100 | | Text | First name or initials only |
+| `issued_on` | date | | Date | |
+| `description` | text ≤ 500 | | Textarea | |
 
-```sql
--- ── Admin users: 1:1 mirror of auth.users ─────────────────────────────
-create table public.profiles (
-  id            uuid primary key references auth.users (id) on delete cascade,
-  email         text not null,
-  display_name  text,
-  role          text not null default 'admin' check (role in ('owner', 'admin', 'editor')),
-  is_active     boolean not null default true,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
-);
+**`work_permits`**
 
--- ── Content types: the schema lives here, as data ────────────────────
-create table public.content_types (
-  id            uuid primary key default gen_random_uuid(),
-  kind          text not null check (kind in ('collection', 'single')),
-  display_name  text not null,
-  singular_id   text not null unique,            -- 'article'  (admin URLs, single-type API path)
-  plural_id     text not null unique,            -- 'articles' (collection API path)
-  description   text,
-  fields        jsonb not null default '[]',     -- FieldDefinition[] (ordered)
-  settings      jsonb not null default '{}',     -- ContentTypeSettings
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
-  created_by    uuid references public.profiles (id) on delete set null,
-  updated_by    uuid references public.profiles (id) on delete set null
-);
+| Column | Type | Required | Editor input | Notes |
+|---|---|---|---|---|
+| `image_*` | — | Always | Image ("Work permit") | Blur personal data first |
+| `country` | text ≤ 60 | Always | Country | |
+| `permit_type` | text ≤ 100 | | Text | e.g. "Type A" |
+| `job_title` | text ≤ 100 | | Text | |
+| `person_name` | text ≤ 100 | | Text | First name or initials only |
+| `issued_on` | date | | Date | |
+| `description` | text ≤ 500 | | Textarea | |
 
--- ── Entries: one row per document, holding draft + published snapshots ─
-create table public.entries (
-  id                  uuid primary key default gen_random_uuid(),
-  content_type_id     uuid not null references public.content_types (id) on delete cascade,
-  draft_data          jsonb not null default '{}',
-  published_data      jsonb,                     -- null = not published
-  status              text generated always as (
-                        case when published_data is null      then 'draft'
-                             when draft_data = published_data then 'published'
-                             else 'modified' end) stored,
-  published_at        timestamptz,
-  first_published_at  timestamptz,
-  created_at          timestamptz not null default now(),
-  updated_at          timestamptz not null default now(),
-  created_by          uuid references public.profiles (id) on delete set null,
-  updated_by          uuid references public.profiles (id) on delete set null
-);
-create index entries_type_updated_idx on public.entries (content_type_id, updated_at desc);
-create index entries_type_status_idx  on public.entries (content_type_id, status);
-create index entries_draft_gin        on public.entries using gin (draft_data jsonb_path_ops);
-create index entries_published_gin    on public.entries using gin (published_data jsonb_path_ops);
+`country` is a text field that suggests country names from `src/config/countries.ts` (an HTML `datalist`). The suggestions keep spelling consistent, so the website can filter by country, but any value can still be typed.
 
--- ── Media: files live in R2, metadata lives here ─────────────────────
-create table public.media (
-  id            uuid primary key default gen_random_uuid(),
-  storage_key   text not null unique,            -- 'media/2026/10/<uuid>-hero.jpg' (immutable)
-  file_name     text not null,                   -- original file name
-  name          text not null,                   -- editable display name
-  alt_text      text,
-  caption       text,
-  mime_type     text not null,
-  size_bytes    bigint not null,
-  width         integer,
-  height        integer,
-  placeholder   text,                            -- thumbhash data URL (optional)
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now(),
-  created_by    uuid references public.profiles (id) on delete set null,
-  updated_by    uuid references public.profiles (id) on delete set null
-);
-create index media_created_idx on public.media (created_at desc);
+### 6.3 Migration 1: content tables
 
--- ── API tokens: stored as HMAC hashes, plaintext shown once ──────────
-create table public.api_tokens (
-  id            uuid primary key default gen_random_uuid(),
-  name          text not null,
-  description   text,
-  access        text not null check (access in ('read_only', 'full_access')),
-  token_hash    text not null unique,            -- hex(HMAC-SHA256(token, API_TOKEN_PEPPER))
-  token_hint    text not null,                   -- e.g. 'cms_Ab12…9xYz'
-  expires_at    timestamptz,                     -- null = never expires
-  last_used_at  timestamptz,
-  created_at    timestamptz not null default now(),
-  created_by    uuid references public.profiles (id) on delete set null
-);
-
--- ── Webhooks + delivery log ───────────────────────────────────────────
-create table public.webhooks (
-  id          uuid primary key default gen_random_uuid(),
-  name        text not null,
-  url         text not null,
-  events      text[] not null default '{}',
-  headers     jsonb not null default '{}',       -- extra static headers
-  secret      text not null,                     -- HMAC signing secret
-  enabled     boolean not null default true,
-  created_at  timestamptz not null default now(),
-  updated_at  timestamptz not null default now()
-);
-create table public.webhook_deliveries (
-  id            uuid primary key default gen_random_uuid(),
-  webhook_id    uuid not null references public.webhooks (id) on delete cascade,
-  event         text not null,
-  attempt       integer not null default 1,
-  status_code   integer,
-  success       boolean not null,
-  duration_ms   integer,
-  error         text,
-  request_body  jsonb,
-  created_at    timestamptz not null default now()
-);
-create index webhook_deliveries_idx on public.webhook_deliveries (webhook_id, created_at desc);
-
--- ── Phase 8: components (reusable field groups) ──────────────────────
-create table public.components (
-  id            uuid primary key default gen_random_uuid(),
-  uid           text not null unique,            -- 'shared.seo'
-  category      text not null,                   -- 'shared'
-  display_name  text not null,
-  icon          text,
-  fields        jsonb not null default '[]',
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
-);
-```
-
-Security setup is a custom SQL migration (`drizzle-kit generate --custom --name=security`):
+Create it with `pnpm db:new content_tables`. That makes `supabase/migrations/<timestamp>_content_tables.sql`; paste in the SQL below.
 
 ```sql
--- RLS on everywhere, with NO policies: nothing is reachable through the Data API
--- (which is also disabled). The app connects as the table owner and is not affected.
-alter table public.profiles           enable row level security;
-alter table public.content_types      enable row level security;
-alter table public.entries            enable row level security;
-alter table public.media              enable row level security;
-alter table public.api_tokens         enable row level security;
-alter table public.webhooks           enable row level security;
-alter table public.webhook_deliveries enable row level security;
+create type public.content_status as enum ('draft', 'published');
 
--- Never auto-grant future tables/functions to the API roles
-alter default privileges for role postgres in schema public
-  revoke select, insert, update, delete on tables from anon, authenticated, service_role;
-alter default privileges for role postgres in schema public
-  revoke execute on functions from public, anon, authenticated, service_role;
+-- Helpers live in a schema that the Data API does not expose
+create schema if not exists private;
 
--- Every user the owner creates in the dashboard gets a profile.
--- The very first user becomes 'owner'.
-create function public.handle_new_user()
+-- Keeps updated_at fresh, protects created_at, and stamps published_at on first publish
+create function private.content_before_write()
 returns trigger
 language plpgsql
-security definer set search_path = ''
+set search_path = ''
 as $$
 begin
-  insert into public.profiles (id, email, role)
-  values (
-    new.id,
-    new.email,
-    case when exists (select 1 from public.profiles) then 'admin' else 'owner' end
-  );
+  if tg_op = 'UPDATE' then
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+  if new.status = 'published' and new.published_at is null then
+    new.published_at := now();
+  end if;
   return new;
 end;
 $$;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
-revoke execute on function public.handle_new_user() from public, anon, authenticated;
+
+create table public.blog (
+  id               uuid primary key default gen_random_uuid(),
+  title            text not null check (char_length(title) between 1 and 200),
+  slug             text not null unique check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' and char_length(slug) <= 120),
+  excerpt          text check (char_length(excerpt) <= 300),
+  content          text not null default '',
+  image_url        text,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  author_name      text check (char_length(author_name) <= 100),
+  tags             text[] not null default '{}' check (cardinality(tags) <= 10),
+  seo_title        text check (char_length(seo_title) <= 70),
+  seo_description  text check (char_length(seo_description) <= 160),
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+create table public.news (
+  id               uuid primary key default gen_random_uuid(),
+  title            text not null check (char_length(title) between 1 and 200),
+  slug             text not null unique check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' and char_length(slug) <= 120),
+  excerpt          text check (char_length(excerpt) <= 300),
+  content          text not null default '',
+  image_url        text,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  source_url       text check (source_url ~ '^https?://'),
+  seo_title        text check (char_length(seo_title) <= 70),
+  seo_description  text check (char_length(seo_description) <= 160),
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+create table public.success_stories (
+  id               uuid primary key default gen_random_uuid(),
+  title            text not null check (char_length(title) between 1 and 200),
+  slug             text not null unique check (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$' and char_length(slug) <= 120),
+  person_name      text check (char_length(person_name) <= 100),
+  country          text check (char_length(country) <= 60),
+  job_title        text check (char_length(job_title) <= 100),
+  excerpt          text check (char_length(excerpt) <= 300),
+  content          text not null default '',
+  image_url        text,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  video_url        text check (video_url ~ '^https?://'),
+  is_featured      boolean not null default false,
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+create table public.testimonials (
+  id               uuid primary key default gen_random_uuid(),
+  name             text not null check (char_length(name) between 1 and 100),
+  job_title        text check (char_length(job_title) <= 100),
+  country          text check (char_length(country) <= 60),
+  quote            text check (char_length(quote) <= 1000),
+  rating           smallint check (rating between 1 and 5),
+  image_url        text,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  video_url        text check (video_url ~ '^https?://'),
+  is_featured      boolean not null default false,
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+create table public.visa_stamps (
+  id               uuid primary key default gen_random_uuid(),
+  image_url        text not null,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  country          text not null check (char_length(country) between 1 and 60),
+  visa_type        text check (char_length(visa_type) <= 100),
+  person_name      text check (char_length(person_name) <= 100),
+  issued_on        date,
+  description      text check (char_length(description) <= 500),
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+create table public.work_permits (
+  id               uuid primary key default gen_random_uuid(),
+  image_url        text not null,
+  image_alt        text check (char_length(image_alt) <= 200),
+  image_width      integer check (image_width > 0),
+  image_height     integer check (image_height > 0),
+  country          text not null check (char_length(country) between 1 and 60),
+  permit_type      text check (char_length(permit_type) <= 100),
+  job_title        text check (char_length(job_title) <= 100),
+  person_name      text check (char_length(person_name) <= 100),
+  issued_on        date,
+  description      text check (char_length(description) <= 500),
+  status           public.content_status not null default 'draft',
+  published_at     timestamptz,
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now()
+);
+
+-- Same indexes and trigger on all six tables
+do $$
+declare t text;
+begin
+  foreach t in array array['blog', 'news', 'success_stories', 'testimonials', 'visa_stamps', 'work_permits'] loop
+    -- website lists: newest published first
+    execute format('create index %I on public.%I (published_at desc) where status = ''published''', t || '_published_idx', t);
+    -- CMS lists: recently edited first
+    execute format('create index %I on public.%I (updated_at desc)', t || '_updated_idx', t);
+    execute format('create trigger content_before_write before insert or update on public.%I
+                    for each row execute function private.content_before_write()', t);
+  end loop;
+end $$;
 ```
 
-### 7.2 Content-type definition format
+**Draft vs publish checks.**
+- The database enforces formats, lengths and the *Always* fields.
+- The *Publish* requirements are checked by the shared Zod schemas ([§11.3](#113-validation-draft-vs-publish)), in the browser for quick feedback and on the server as the final word.
 
-This lives in `src/lib/schema/types.ts` and is validated with Zod on every save in the builder.
+### 6.4 Migration 2: access rules (RLS)
 
-```ts
-export type FieldType =
-  | 'text' | 'longtext' | 'richtext' | 'number' | 'boolean'
-  | 'date' | 'datetime' | 'email' | 'enumeration' | 'uid'
-  | 'media' | 'relation' | 'json'
-  | 'component' | 'dynamiczone' // phase 8
+`pnpm db:new access_control`
 
-interface FieldBase {
-  id: string            // stable nanoid; never changes, so renames can be detected
-  name: string          // API key: /^[A-Za-z][A-Za-z0-9_]*$/, not reserved
-  label: string
-  description?: string  // help text under the input
-  required?: boolean    // enforced on publish
-  private?: boolean     // never returned by the public API
-  ui?: { width?: 4 | 6 | 8 | 12; placeholder?: string } // 12-column edit grid
-}
+> **Why explicit `GRANT`s?** Supabase is changing its defaults. Projects created since 2026-05-30 no longer give the API roles automatic access to new `public` tables, and **from 2026-10-30 this applies to all projects**. We therefore revoke everything and grant exactly what is needed, which works under the old and the new defaults. RLS then filters the rows.
 
-export type FieldDefinition = FieldBase & (
-  | { type: 'text' | 'longtext'; unique?: boolean; minLength?: number; maxLength?: number; regex?: string; default?: string }
-  | { type: 'richtext' }
-  | { type: 'number'; format: 'integer' | 'decimal'; unique?: boolean; min?: number; max?: number; default?: number }
-  | { type: 'boolean'; default?: boolean }
-  | { type: 'date' | 'datetime'; default?: 'now' | string }
-  | { type: 'email'; unique?: boolean }
-  | { type: 'enumeration'; values: string[]; default?: string }
-  | { type: 'uid'; targetField?: string; regex?: string }           // always unique
-  | { type: 'media'; multiple: boolean; allowedTypes: Array<'image' | 'video' | 'audio' | 'file'> }
-  | { type: 'relation'; target: string; multiple: boolean }        // target = content_types.id
-  | { type: 'json' }
-  | { type: 'component'; component: string; repeatable: boolean; min?: number; max?: number }
-  | { type: 'dynamiczone'; components: string[]; min?: number; max?: number }
-)
+```sql
+-- 1. Who may use the CMS
+create table public.admins (
+  user_id     uuid primary key references auth.users (id) on delete cascade,
+  created_at  timestamptz not null default now()
+);
+alter table public.admins enable row level security;
+revoke all on public.admins from anon, authenticated;
+grant select on public.admins to authenticated;
+create policy "Users can see their own admin row"
+  on public.admins for select to authenticated
+  using (user_id = (select auth.uid()));
 
-export interface ContentTypeSettings {
-  draftAndPublish: boolean                              // default true
-  displayField?: string                                 // "entry title" in lists and relation pickers
-  listColumns?: string[]                                // list-view columns
-  defaultSort?: { field: string; order: 'asc' | 'desc' }
-  publicRead?: boolean                                  // allow find/findOne without a token
-  previewUrl?: string                                   // e.g. 'https://example.com/api/draft?slug={slug}'
-}
+-- 2. Policy helper. SECURITY DEFINER lets it read `admins` regardless of RLS;
+--    the `private` schema keeps it out of the Data API.
+create function private.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.admins where user_id = (select auth.uid()))
+$$;
+revoke execute on function private.is_admin() from public;
+grant usage on schema private to authenticated;
+grant execute on function private.is_admin() to authenticated;
+
+-- 3. Content tables: privileges + policies
+do $$
+declare t text;
+begin
+  foreach t in array array['blog', 'news', 'success_stories', 'testimonials', 'visa_stamps', 'work_permits'] loop
+    execute format('alter table public.%I enable row level security', t);
+
+    execute format('revoke all on public.%I from anon, authenticated', t);
+    execute format('grant select on public.%I to anon', t);
+    execute format('grant select, insert, update, delete on public.%I to authenticated', t);
+    -- Only for scripts that use the secret key (never the website, never the CMS)
+    execute format('grant select, insert, update, delete on public.%I to service_role', t);
+
+    -- Visitors (and your website): published items whose date has arrived
+    execute format($p$
+      create policy "Public reads published" on public.%I
+        for select to anon
+        using (status = 'published' and published_at <= now())
+    $p$, t);
+
+    -- Logged-in users: the same, or everything for admins (one policy per role, no overlap)
+    execute format($p$
+      create policy "Admins read all, others read published" on public.%I
+        for select to authenticated
+        using ((status = 'published' and published_at <= now()) or (select private.is_admin()))
+    $p$, t);
+
+    execute format($p$
+      create policy "Admins insert" on public.%I
+        for insert to authenticated
+        with check ((select private.is_admin()))
+    $p$, t);
+
+    execute format($p$
+      create policy "Admins update" on public.%I
+        for update to authenticated
+        using ((select private.is_admin()))
+        with check ((select private.is_admin()))
+    $p$, t);
+
+    execute format($p$
+      create policy "Admins delete" on public.%I
+        for delete to authenticated
+        using ((select private.is_admin()))
+    $p$, t);
+  end loop;
+end $$;
 ```
 
-**Naming rules**
+**Notes**
+- **`(select private.is_admin())`** is evaluated once per query, not once per row (Supabase's RLS performance advice).
+- **One SELECT policy per role.** This avoids the advisor's "multiple permissive policies" warning.
+- **`anon` never evaluates `private.is_admin()`**, so it needs no access to the `private` schema.
+- **Missing grants** show up as error `42501`, with a hint naming the `GRANT` that is needed.
 
-- **API IDs** are kebab-case (`^[a-z][a-z0-9-]*$`). They are derived from the display name with `pluralize`, and the singular must differ from the plural.
-- **Every ID is unique** across all singular *and* plural IDs.
-- **Reserved API IDs:** `admin`, `api`, `auth`, `login`, `logout`, `health`, `media`, `upload`, `uploads`, `files`, `users`, `tokens`, `webhooks`, `content-types`, `components`, `settings`, `graphql`, `i18n`, plus anything starting with `_`.
-- **Reserved field names:** `id`, `documentId`, `createdAt`, `updatedAt`, `publishedAt`, `firstPublishedAt`, `createdBy`, `updatedBy`, `status`, `locale`, `meta`, `data`, `__component`, `__id`, plus anything starting with `_` or `$`.
+### 6.5 Managing admins
 
-### 7.3 Entry document example
+Create the user first in **Authentication → Users → Add user → Create new user**. Then run this in the SQL editor:
 
-Example content type `Article` (`article` / `articles`). `draft_data` (and `published_data` once published) look like this:
+```sql
+-- give CMS access
+insert into public.admins (user_id)
+select id from auth.users where email = 'name@example.com';
 
-```json
-{
-  "title": "Uploading straight to R2",
-  "slug": "uploading-straight-to-r2",
-  "excerpt": "Presigned URLs keep large files off our servers.",
-  "body": { "type": "doc", "content": [{ "type": "paragraph", "content": [{ "type": "text", "text": "Hello!" }] }] },
-  "cover": "6f1c0a52-8a4e-4c9b-9a51-2f7f5b0d1e11",
-  "tags": ["0b7e3c1d-…", "91aa4f20-…"],
-  "author": "c3d2e5f6-…",
-  "publishedOn": "2026-10-02",
-  "featured": true,
-  "category": "guide"
-}
+-- list admins
+select u.email, a.created_at
+from public.admins a join auth.users u on u.id = a.user_id
+order by a.created_at;
+
+-- remove CMS access (also delete or ban the auth user if they shouldn't log in at all)
+delete from public.admins
+where user_id = (select id from auth.users where email = 'name@example.com');
 ```
 
-### 7.4 Draft & Publish state machine
+### 6.6 Checking the rules
 
-```mermaid
-stateDiagram-v2
-  [*] --> Draft: create
-  Draft --> Published: publish
-  Published --> Modified: save changes
-  Modified --> Published: publish or discard changes
-  Published --> Draft: unpublish
-  Modified --> Draft: unpublish (keeps the draft)
+Run each block **on its own** in the SQL editor. Every block ends with `rollback`, so nothing is kept.
+
+```sql
+-- As a website visitor: drafts are invisible and writes are refused
+begin;
+  insert into public.blog (title, slug) values ('RLS test draft', 'rls-test-draft');
+  set local role anon;
+  select title, status from public.blog;  -- no 'RLS test draft'
+rollback;
+
+begin;
+  set local role anon;
+  insert into public.blog (title, slug) values ('Hack', 'hack');  -- ERROR: permission denied
+rollback;
+
+-- As an admin: drafts are visible
+begin;
+  select set_config('request.jwt.claims',
+    json_build_object('sub', (select id from auth.users where email = 'name@example.com'), 'role', 'authenticated')::text, true);
+  set local role authenticated;
+  select count(*) from public.blog;  -- includes drafts
+rollback;
 ```
 
-| Action | SQL effect | Status after | Webhook |
-|---|---|---|---|
-| Create | `insert … draft_data = $input` | draft | `entry.create` |
-| Save | `draft_data = $input` | draft / modified | `entry.update` |
-| Publish | (save if dirty) then `published_data = draft_data, published_at = now(), first_published_at = coalesce(first_published_at, now())` | published | `entry.publish` |
-| Unpublish | `published_data = null, published_at = null` | draft | `entry.unpublish` |
-| Discard changes | `draft_data = published_data` | published | `entry.update` |
-| Delete | `delete` | — | `entry.delete` |
-| Save on a type without Draft & Publish | `draft_data = published_data = $input` | always published | `entry.update` |
+Also check that **Advisors → Security Advisor** shows no errors. Automated versions of these checks are in [§16](#16-testing).
 
-**Optimistic locking.** Every save sends the `updated_at` it loaded and runs `… where id = $id and updated_at = $expected`. Zero rows updated means "this entry was changed by someone else — reload".
+> **Already tested.** Both migrations and these checks were run on a local PostgreSQL 18, with stand-ins for Supabase's `auth` schema and API roles (Supabase runs Postgres 17). Results:
+> - Visitors see only published rows whose date has passed; drafts and scheduled items are hidden.
+> - Visitors can't write and can't read `admins`.
+> - A logged-in non-admin sees the same as a visitor: an insert is refused by RLS, updates match 0 rows, and they see no `admins` rows.
+> - Admins see and change everything.
+> - The trigger stamps `published_at`, moves `updated_at` and protects `created_at`.
+> - A stale `updated_at` matches 0 rows, which is the edit-conflict check.
+> - A duplicate slug gives `23505`, a malformed slug gives `23514`, and a visa stamp without an image is rejected.
 
-### 7.5 Validation: draft vs publish
+### 6.7 Changing the schema later
 
-`buildEntrySchema(contentType, { mode })` in `src/lib/schema` builds a Zod object from the field definitions. It runs in the browser as the react-hook-form resolver and on the server, where it is authoritative. Unknown keys are stripped.
+To add a field, e.g. a blog category:
 
-| Rule | On save (draft) | On publish |
-|---|---|---|
-| Type/shape (string, number, ISO date, enum member, UUID format) | ✅ | ✅ |
-| `maxLength`, `max` | ✅ | ✅ |
-| `unique` / UID uniqueness (checked in the DB) | ✅ (stricter than Strapi) | ✅ |
-| `required`, `minLength`, `min`, `regex`, email format | — | ✅ |
-| Repeatable / dynamic zone `min`/`max` items (phase 8) | — | ✅ |
-| Referenced media / entries exist | — | ✅ (warn if a related entry is unpublished) |
+1. Create a migration with `pnpm db:new add_blog_category`, containing `alter table public.blog add column category text check (char_length(category) <= 60);`.
+2. Apply it and regenerate types with `pnpm db:push && pnpm db:types`.
+3. Add one line to `src/config/collections.ts`: `{ name: 'category', label: 'Category', type: 'text', maxLength: 60, placement: 'side' }`.
+4. Optionally, regenerate the types in the website project and use the new column.
 
-### 7.6 Uniqueness
-
-Uniqueness is checked inside the save or publish transaction:
-
-1. `select pg_advisory_xact_lock(hashtextextended($contentTypeId || ':' || $field, 0))`.
-2. Run `select 1 from entries where content_type_id = $ct and id <> $id and (draft_data->>$field = $value or published_data->>$field = $value) limit 1`.
-3. If a row is found, return a field error: *"Already used by 'Other entry'"*.
-
-Turning `unique` on for an existing field first scans for duplicates and refuses with a list of the clashing entries. UID fields also get a live availability check in the editor.
-
-### 7.7 Relations and media references
-
-- **Storage.** Stored as a UUID string ("has one") or an ordered UUID array ("has many").
-- **Snapshots.** The published snapshot keeps the IDs it had at publish time.
-- **Reads.**
-  - Targets are loaded in batches (one query per target type per response), and missing targets are silently dropped.
-  - Published reads only return related entries that are themselves published.
-  - Reverse lookups are plain filters, e.g. `filters[author][$eq]=<authorId>`. These compile to `published_data @> '{"author":"<id>"}'`, which the GIN index serves.
-- **Deleting a content type** that other types point at is **blocked**, with a message like "Article.author targets Author — remove that field first".
-- **Media "used by" check.** `draft_data @? '$.** ? (@ == "<mediaId>")' or published_data @? …` finds exact matches at any depth, including inside components and rich-text image attributes.
-
-### 7.8 Schema evolution rules
-
-When the builder saves a schema, it diffs the old and new field lists by field `id`. All migrations below run in the same transaction as the schema update.
-
-| Change | Allowed | Data migration |
-|---|---|---|
-| Add a field | ✅ | none (a missing key reads as `null` / default) |
-| Rename a field (same `id`, new `name`) | ✅ | `draft_data = (draft_data - old) \|\| jsonb_build_object(new, draft_data->old)` where `draft_data ? old`; same for `published_data`. Also updates `displayField`, `listColumns` and `uid.targetField`. |
-| Delete a field | ✅ after confirmation | `draft_data - name`, `published_data - name` |
-| Change a field's type or relation target | ❌ delete and re-add | — |
-| Toggle `required` / `private` | ✅ | none |
-| Turn `unique` on | ✅ if there are no duplicates | duplicate scan |
-| Edit enumeration values | ✅ | warn if entries use a removed value |
-| Turn Draft & Publish off | ✅ after confirmation | `published_data = draft_data` for every entry |
-| Turn Draft & Publish on | ✅ | none; existing entries stay published |
-| Change API IDs | ✅ with a warning ("breaks API consumers") | none |
-| Delete a content type | ✅ after typing its name; blocked if referenced | entries cascade |
-
-The confirmation dialog shows the impact, e.g. *"1 field renamed, 1 deleted → 134 entries will be updated"*.
-
-### 7.9 Database security posture
-
-- **Data API disabled** (Supabase → Integrations → Data API). We never query through PostgREST.
-- **RLS enabled on every table with no policies** as a second line of defence. Supabase's *Security Advisor* will show the INFO-level note `rls_enabled_no_policy`; that is expected.
-- **Default privileges revoked** for `anon`, `authenticated` and `service_role`.
-- **The app connects as `postgres` (the table owner) through the pooler**, so RLS doesn't apply to it. Authorization is enforced by the DAL and services. `DATABASE_URL` is a server-only secret.
+**Renaming or deleting** a column breaks website queries that use it. Update the website in the same release.
 
 ---
 
-## 8. Field types
+## 7. Login & access control
 
-| Type | Stored as | Settings | Admin input | API output |
-|---|---|---|---|---|
-| `text` | string | required, unique, min/maxLength, regex, default | input | string |
-| `longtext` | string | required, min/maxLength, default | auto-growing textarea | string |
-| `richtext` | Tiptap JSON document | required | Tiptap editor: headings, bold/italic, lists, links, quote, code, images from the library | HTML string (default) or the JSON doc with `richText=json` |
-| `number` | number | integer/decimal, min, max, unique, default | number input | number |
-| `boolean` | boolean | default | switch | boolean |
-| `date` | `"YYYY-MM-DD"` | required, default (today) | date picker | string |
-| `datetime` | ISO 8601 UTC | required, default (now) | date + time picker, shown in local time | string |
-| `email` | string | required, unique | email input | string |
-| `enumeration` | string | values, default, required | select (or radio if ≤ 4 values) | string |
-| `uid` | slug string | target field, regex | input + "generate" button + availability badge | string |
-| `media` | UUID or UUID[] | single/multiple, allowed types, required | media picker (library + upload) with sortable thumbnails | media object(s), **always populated** |
-| `relation` | UUID or UUID[] | target type, has one / has many, required | async search combobox on the target's display field; sortable chips for "many" | ID(s), or objects when `populate` names it |
-| `json` | any JSON | required | CodeMirror JSON editor with linting | JSON |
-| `component` *(P8)* | object or object[] | component, repeatable, min/max | nested fieldset or sortable, collapsible list | object(s) |
-| `dynamiczone` *(P8)* | `[{ "__component": "…", … }]` | allowed components, min/max | sortable blocks + "Add block" picker | array with `__component` |
+### 7.1 Supabase setup (one-time)
 
-Each field type is one module in a **field registry** (`src/components/fields/registry.ts`):
+1. **Create the project** in a region near you and your website, e.g. Frankfurt (`eu-central-1`).
+   - Under **Security options**, untick **"Automatically expose new tables"**; the migrations grant access explicitly.
+   - Tick **"Enable automatic RLS"**.
+   - Keep the database password in a password manager.
+2. **Turn off sign-ups.** In **Authentication → Sign In / Providers**:
+   - keep the **Email** provider enabled;
+   - turn **off "Allow new users to sign up"**. This blocks only `/signup`; users you create can still log in with a password.
+   - Leave **anonymous sign-ins off** (the default).
+3. **Set a password rule.** In the Email provider settings, set the minimum password length to 12 or more.
+4. **Set the Site URL.** In **Authentication → URL Configuration**, set it to `https://cms.example.com`.
+5. **Copy the keys.** In **Project Settings → API Keys**, copy the **Project URL** and the **publishable key** (`sb_publishable_…`). The CMS and the website need nothing else. Never deploy the secret key (`sb_secret_…`).
+6. **Run the migrations.** This is Phase 1 ([§15](#15-roadmap)).
+7. **Create yourself as admin.** **Add user → Create new user**, enter email and password, and leave "Auto confirm user" ticked. No email is sent. Then run the `insert into public.admins …` SQL from [§6.5](#65-managing-admins).
+8. **Optional: add a CAPTCHA.** In **Authentication → Attack Protection**, enable Cloudflare Turnstile. The login form must then send `options.captchaToken`.
 
-```ts
-interface FieldTypeModule<F extends FieldDefinition> {
-  type: F['type']
-  label: string
-  icon: LucideIcon
-  settingsSchema: z.ZodType          // validates the field definition in the builder
-  SettingsForm: React.ComponentType  // builder UI for the field's options
-  Input: React.ComponentType<{ field: F }> // connected to react-hook-form via Controller
-  toZod(field: F, mode: 'draft' | 'publish'): z.ZodType
-  defaultValue(field: F): unknown
-}
-```
+### 7.2 How login works
 
-Adding a new field type later means adding one module.
+1. **The `/login` page** is a Server Component. It checks the current session:
+   - **an admin** is redirected to `/`;
+   - **logged in but not an admin:** shows "This account has no access to the CMS" and a **Sign out** button;
+   - **otherwise:** shows the login form.
+2. **The login form** is a Client Component. It calls `supabase.auth.signInWithPassword()` **in the browser** (see D10), and `@supabase/ssr` stores the session in cookies.
+3. **The form then reads the `admins` table.** RLS lets a user see only their own row.
+   - **No row:** it calls `signOut()` and shows "This account does not have access".
+   - **Otherwise:** it goes to `next` (only paths starting with a single `/`) or to `/`.
+4. **`src/proxy.ts` runs on every page request.** It refreshes the session cookie and sends visitors without a session to `/login?next=…`. This is only a fast first gate.
+5. **The real check** is `requireAdmin()`. It runs in every CMS page, every data function and every Server Action:
+   - it calls `getClaims()`, which verifies the JWT;
+   - it then looks up `admins`.
 
----
+   RLS backs it up: even if a check were forgotten, a non-admin could not read drafts or write anything.
+6. **Logout** is a Server Action that calls `signOut()` and redirects to `/login`.
 
-## 9. Authentication & authorization
+### 7.3 Code
 
-### 9.1 Supabase project configuration (one-time)
-
-1. **Create the project** in a region close to your users and your hosting, e.g. `eu-central-1` (Frankfurt) with Vercel `fra1`.
-2. **Disable sign-ups.** Authentication → Sign In / Providers → turn **off** "Allow new users to sign up". Keep the Email provider enabled.
-3. **Check signing keys.** Authentication → JWT signing keys should show an **asymmetric key (ES256/RS256)**, so `getClaims()` verifies tokens locally. New projects have this by default.
-4. **Create users.** Authentication → Users → *Add user → Create new user*, entering email and password with **Auto confirm** checked. The first user becomes `owner` through the trigger.
-5. **Turn off the Data API.** Integrations → Data API → disable it.
-6. **Copy the keys.** Settings → API keys: copy the **publishable key**. A **secret key** is only needed for the optional password-reset script.
-7. **Copy the database connection details** (Database → Connect):
-   - the **transaction pooler** URI (port 6543) for the app;
-   - the **session pooler** URI (port 5432) for migrations;
-   - the **SSL root certificate**.
-8. **Optional: CAPTCHA.** Authentication → Attack Protection → enable **Cloudflare Turnstile** for logins.
-9. **Run the migrations and check the advisor.** Run `supabase link` then `supabase db push`, and check Advisors → Security shows no errors.
-
-### 9.2 Auth flow
-
-- **Login.** `/login` posts to the `login` Server Action, which calls `supabase.auth.signInWithPassword()`. `@supabase/ssr` writes the session cookies, and the action redirects to `next`, accepted only if it starts with `/admin`; otherwise `/admin`.
-- **Session refresh.** `src/proxy.ts` uses the matcher `/admin/:path*`. It refreshes the session cookie and redirects anonymous visitors to `/login?next=…`. It is an *optimistic* gate only.
-- **Real checks.** Every admin page, data loader and Server Action calls `requireUser()` from the DAL:
-  - it runs `getClaims()`;
-  - it loads the user's `profiles` row and requires `is_active = true`;
-  - it is wrapped in React `cache()`, so it runs once per request.
-- **Deactivated users.** If a user has a valid Supabase session but `is_active = false`, the DAL denies access. `/login` then shows *"Your account is disabled"* with a sign-out button, so there's no redirect loop.
-- **Logout** is a Server Action that calls `signOut()` and redirects to `/login`.
-- **The public API never uses Supabase sessions**, only API tokens.
-- **No sign-up, invite, magic-link or forgot-password routes exist.** The owner changes passwords with `scripts/set-password.ts`, which calls `auth.admin.updateUserById(id, { password })` with the secret key.
-
-### 9.3 Code sketches
-
-**Supabase server client** (`src/server/auth/supabase.ts`):
+**Supabase clients** (`src/lib/supabase/`). These follow Supabase's official Next.js setup.
 
 ```ts
+// src/lib/supabase/server.ts
 import 'server-only'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import type { Database } from './database.types'
 
-export async function createSupabaseServerClient() {
+export async function createClient() {
   const cookieStore = await cookies()
-  return createServerClient(
+  return createServerClient<Database>(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
     {
@@ -810,27 +740,43 @@ export async function createSupabaseServerClient() {
 }
 ```
 
-**Proxy** (`src/proxy.ts` + `src/server/auth/proxy-session.ts`). This follows the official `updateSession` pattern:
+```ts
+// src/lib/supabase/client.ts  (browser)
+import { createBrowserClient } from '@supabase/ssr'
+import type { Database } from './database.types'
+
+export function createClient() {
+  return createBrowserClient<Database>(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  )
+}
+```
+
+**Proxy.** In Next.js 16, `proxy.ts` replaced `middleware.ts`. It runs on Node.js.
 
 ```ts
 // src/proxy.ts
 import type { NextRequest } from 'next/server'
-import { updateSession } from '@/server/auth/proxy-session'
+import { updateSession } from '@/lib/supabase/proxy'
 
 export async function proxy(request: NextRequest) {
   return updateSession(request)
 }
 
-export const config = { matcher: ['/admin/:path*'] }
+export const config = {
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)'],
+}
 ```
 
 ```ts
-// src/server/auth/proxy-session.ts
+// src/lib/supabase/proxy.ts
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({ request })
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
@@ -841,129 +787,235 @@ export async function updateSession(request: NextRequest) {
           cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
           response = NextResponse.next({ request })
           cookiesToSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options))
-          Object.entries(headers).forEach(([key, value]) => response.headers.set(key, value)) // no-cache headers
+          // no-cache headers so a CDN never stores a response that sets auth cookies
+          Object.entries(headers ?? {}).forEach(([key, value]) => response.headers.set(key, value))
         },
       },
     },
   )
 
-  // Must run right after createServerClient: validates the JWT and refreshes it if needed.
+  // Don't run code between createServerClient and getClaims(): it verifies and refreshes the session.
   const { data } = await supabase.auth.getClaims()
 
-  if (!data?.claims) {
+  if (!data?.claims && request.nextUrl.pathname !== '/login') {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.search = `?next=${encodeURIComponent(request.nextUrl.pathname + request.nextUrl.search)}`
     const redirect = NextResponse.redirect(url)
-    response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie)) // keep cookie changes
+    response.cookies.getAll().forEach((cookie) => redirect.cookies.set(cookie)) // keep refreshed cookies
     return redirect
   }
   return response
 }
 ```
 
-**Data Access Layer** (`src/server/auth/dal.ts`):
+**Access checks** (`src/lib/auth.ts`):
 
 ```ts
 import 'server-only'
 import { cache } from 'react'
 import { redirect } from 'next/navigation'
-import { eq } from 'drizzle-orm'
-import { db } from '@/server/db'
-import { profiles } from '@/server/db/schema'
-import { createSupabaseServerClient } from './supabase'
+import { createClient } from '@/lib/supabase/server'
 
+/** Runs once per request (React cache). Null when nobody is logged in. */
 export const getCurrentUser = cache(async () => {
-  const supabase = await createSupabaseServerClient()
+  const supabase = await createClient()
   const { data } = await supabase.auth.getClaims()
-  const userId = data?.claims?.sub
-  if (!userId) return null
+  const claims = data?.claims
+  if (!claims) return null
 
-  const [profile] = await db.select().from(profiles).where(eq(profiles.id, userId)).limit(1)
-  if (!profile?.isActive) return null
-  return { id: profile.id, email: profile.email, name: profile.displayName, role: profile.role }
+  const { data: admin } = await supabase
+    .from('admins')
+    .select('user_id')
+    .eq('user_id', claims.sub)
+    .maybeSingle()
+
+  return { id: claims.sub, email: String(claims.email ?? ''), isAdmin: admin !== null }
 })
 
-export async function requireUser() {
+/** Use at the top of every CMS page, data function and Server Action. */
+export async function requireAdmin() {
   const user = await getCurrentUser()
-  if (!user) redirect('/login')
+  if (!user?.isAdmin) redirect('/login') // the login page explains "no access" when relevant
   return user
 }
 ```
 
-**Login and logout actions** (`src/actions/auth.ts`). The form is a Client Component using `useActionState(login, undefined)`.
+**Login form** (`src/app/login/login-form.tsx`). The page passes in `next`, already checked on the server.
+
+```tsx
+'use client'
+import { useActionState } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+
+export function LoginForm({ next }: { next: string }) {
+  const router = useRouter()
+  const [error, formAction, pending] = useActionState(
+    async (_prev: string | null, formData: FormData) => {
+      const supabase = createClient()
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: String(formData.get('email') ?? ''),
+        password: String(formData.get('password') ?? ''),
+      })
+      if (error) {
+        return error.status === 429 ? 'Too many attempts. Try again in a few minutes.' : 'Invalid email or password.'
+      }
+
+      const { data: admin } = await supabase.from('admins').select('user_id').eq('user_id', data.user.id).maybeSingle()
+      if (!admin) {
+        await supabase.auth.signOut()
+        return 'This account does not have access to the CMS.'
+      }
+      router.replace(next)
+      return null
+    },
+    null,
+  )
+
+  return (
+    <form action={formAction}>
+      {/* shadcn Field + Input for "email" (type=email, autoComplete=username)
+          and "password" (type=password, autoComplete=current-password) */}
+      {error && <p role="alert">{error}</p>}
+      <button type="submit" disabled={pending}>{pending ? 'Signing in…' : 'Sign in'}</button>
+    </form>
+  )
+}
+```
+
+**Logout** (`src/actions/auth.ts`):
 
 ```ts
 'use server'
 import { redirect } from 'next/navigation'
-import * as z from 'zod'
-import { createSupabaseServerClient } from '@/server/auth/supabase'
-
-const LoginInput = z.object({ email: z.email(), password: z.string().min(1), next: z.string().optional() })
-
-export async function login(_prev: { error?: string } | undefined, formData: FormData) {
-  const input = LoginInput.safeParse(Object.fromEntries(formData))
-  if (!input.success) return { error: 'Enter your email and password.' }
-
-  const supabase = await createSupabaseServerClient()
-  const { error } = await supabase.auth.signInWithPassword({
-    email: input.data.email,
-    password: input.data.password,
-  })
-  if (error) return { error: 'Invalid email or password.' } // never reveal which part was wrong
-
-  redirect(input.data.next?.startsWith('/admin') ? input.data.next : '/admin')
-}
+import { createClient } from '@/lib/supabase/server'
 
 export async function logout() {
-  const supabase = await createSupabaseServerClient()
+  const supabase = await createClient()
   await supabase.auth.signOut()
   redirect('/login')
 }
 ```
 
-### 9.4 Authorization rules
+**Rules**
+- **`proxy.ts` is only a fast first gate.** Next.js docs say Proxy must not be your only authorization. Server Actions are POST requests to the page that uses them, so **every action calls `requireAdmin()` itself**.
+- **Don't rely on checks in layouts alone.** Layouts don't re-render on client navigation.
+- **Use `getClaims()` on the server, never `getSession()`.** `getSession()` doesn't verify the token. New projects sign JWTs with asymmetric keys, so `getClaims()` verifies locally without a network call.
+- **Client Components never import `src/lib/auth.ts` or other server modules.** `import 'server-only'` enforces this.
 
-- In v1, **every active user has full admin rights**. `role` is stored now so RBAC can be added later (editors could manage content and media only). Only the `owner` can deactivate other users.
-- **Every Server Action starts with `requireUser()`.** A test walks the exports of `src/actions/*` to enforce this.
-- **Do not put auth checks only in layouts.** Layouts don't re-render on navigation. Check in pages, actions and the DAL.
-- **Client Components never import `src/server/**`** (`server-only` enforces this). They receive narrow DTOs.
+### 7.4 Passwords
+
+- There are no reset emails. Supabase's built-in email sender only delivers to your own team's addresses anyway.
+- **To reset an admin's password,** run the small local script `scripts/set-password.ts`. It calls `supabase.auth.admin.updateUserById(id, { password })` with the **secret key**, which you keep in `.env.local` only and never deploy.
+- A "change my password" page is in the backlog.
 
 ---
 
-## 10. Media library on Cloudflare R2
+## 8. Images on Cloudflare R2
 
-### 10.1 Cloudflare setup (one-time)
+### 8.1 Cloudflare setup (one-time)
 
-1. **Enable R2.** A payment method is required even for the free tier.
+1. **Enable R2.** It needs a payment method, but this project stays inside the free tier.
 2. **Create the bucket** `cms-media`.
-   - **Data residency:** if you need EU data residency, create it with **EU jurisdiction** (`wrangler r2 bucket create cms-media --jurisdiction eu`). This **cannot be changed later**, and the S3 endpoint becomes `<ACCOUNT_ID>.eu.r2.cloudflarestorage.com`.
-   - **Otherwise:** use location hint `weur` or `eeur`.
-3. **Connect a custom domain**, e.g. `media.example.com`. Its zone must be in the same Cloudflare account. Keep the **r2.dev** URL disabled.
-4. **Add the CORS policy** (bucket → Settings → CORS):
+   - **If data must stay in the EU,** create it with **EU jurisdiction**. This **cannot be changed later**, and the S3 endpoint becomes `<ACCOUNT_ID>.eu.r2.cloudflarestorage.com`.
+   - **Otherwise,** pick a location hint near your users, e.g. Western Europe.
+3. **Connect a custom domain.** In **Settings → Custom Domains**, add `media.example.com`; the domain's DNS must be on Cloudflare. Keep the `r2.dev` URL **disabled**: it is rate-limited and meant for testing.
+4. **Add a CORS policy** (**Settings → CORS policy**) so the CMS can upload from the browser:
 
    ```json
-   [{ "AllowedOrigins": ["https://cms.example.com", "http://localhost:3000"],
-      "AllowedMethods": ["PUT"], "AllowedHeaders": ["Content-Type"],
-      "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600 }]
+   [
+     {
+       "AllowedOrigins": ["https://cms.example.com", "http://localhost:3000"],
+       "AllowedMethods": ["PUT"],
+       "AllowedHeaders": ["Content-Type"],
+       "ExposeHeaders": ["ETag"],
+       "MaxAgeSeconds": 3600
+     }
+   ]
    ```
 
-5. **Add a Cache Rule** on `media.example.com` to cache everything with a long edge and browser TTL (1 year), and turn on Smart Tiered Cache. Keys are immutable, so this is safe.
-6. **Add a Response Header Transform Rule** on `media.example.com` that sets `X-Content-Type-Options: nosniff`.
-7. **Optional, recommended:** enable Images → **Transformations** for the zone.
-8. **Create an R2 API token** (Account API token) with **Object Read & Write scoped to `cms-media` only**. Copy its Access Key ID and Secret.
-9. **Add a lifecycle rule** that aborts incomplete multipart uploads after 1 day.
-10. **Optional:** create an API token with **Zone → Cache Purge** for `media.example.com`, so deleted files are purged from the CDN.
+   - Changes can take about 30 seconds to apply.
+   - This JSON is the dashboard's format. `wrangler r2 bucket cors set` uses a different schema.
+   - Presigned uploads only work on the S3 endpoint (`<ACCOUNT_ID>.r2.cloudflarestorage.com`), not on the custom domain. The custom domain is for reading.
 
-### 10.2 Upload flow
+5. **Add a Cache Rule** for `media.example.com`: eligible for cache, with edge TTL and browser TTL of 1 year. This is safe because a file name never changes once uploaded.
+6. **Add a Response Header Transform Rule** for `media.example.com` that sets `X-Content-Type-Options: nosniff`.
+7. **Create an R2 API token** (**R2 → Manage API tokens**) with **Object Read & Write** on **this bucket only**. Copy the Access Key ID and Secret Access Key.
 
-**S3 client** (`src/server/storage/r2.ts`):
+### 8.2 File names (object keys)
+
+```text
+<collection>/<yyyy>/<mm>/<uuid>.<ext>      e.g. visa-stamps/2026/10/7c9e6679-7425-40de-944b-e07fc1f90ae7.webp
+```
+
+- **The server generates the keys.** Original file names are never used, because they often contain people's names.
+- **Keys are never reused,** so a replacement is always a new file and caching stays simple.
+
+### 8.3 Upload flow
+
+**Step 1: prepare the image in the browser** (`src/lib/images/prepare.ts`).
 
 ```ts
-import 'server-only'
-import { S3Client } from '@aws-sdk/client-s3'
+const ACCEPTED = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif', 'image/heic', 'image/heif']
+const MAX_INPUT_BYTES = 25 * 1024 * 1024
 
-const jurisdiction = process.env.R2_JURISDICTION // 'eu' or undefined
+export type PreparedImage = { blob: Blob; type: string; width: number; height: number }
+
+export async function prepareImage(file: File, maxSide = 2000): Promise<PreparedImage> {
+  if (!ACCEPTED.includes(file.type)) throw new Error('Please use a JPG, PNG, WebP, AVIF, HEIC or GIF image.')
+  if (file.size > MAX_INPUT_BYTES) throw new Error('Images must be smaller than 25 MB.')
+
+  let bitmap: ImageBitmap
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }) // respects phone rotation
+  } catch {
+    // e.g. HEIC in Chrome/Edge/Firefox (only Safari can decode HEIC)
+    throw new Error('This browser cannot read this image. Please convert it to JPG and try again.')
+  }
+
+  if (file.type === 'image/gif') {
+    const size = { width: bitmap.width, height: bitmap.height }
+    bitmap.close()
+    return { blob: file, type: file.type, ...size } // keep animation: upload as-is
+  }
+
+  const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height))
+  const width = Math.round(bitmap.width * scale)
+  const height = Math.round(bitmap.height * scale)
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')!
+  ctx.imageSmoothingQuality = 'high'
+  ctx.fillStyle = '#fff' // transparent areas become white (JPEG has no transparency; it would turn them black)
+  ctx.fillRect(0, 0, width, height)
+  ctx.drawImage(bitmap, 0, 0, width, height)
+  bitmap.close()
+
+  // Re-encoding drops EXIF metadata (GPS location, camera, date).
+  // Chrome, Edge and Firefox encode WebP. Safari can't: it silently returns a big PNG, so fall back to JPEG.
+  let blob = await toBlob(canvas, 'image/webp', 0.82)
+  if (blob.type !== 'image/webp') blob = await toBlob(canvas, 'image/jpeg', 0.85)
+  return { blob, type: blob.type, width, height } // the canvas size is the exact output size
+}
+
+function toBlob(canvas: HTMLCanvasElement, type: string, quality: number) {
+  return new Promise<Blob>((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not process this image.'))), type, quality),
+  )
+}
+```
+
+**Step 2: ask the server for an upload URL** (`src/lib/r2.ts` and `src/actions/uploads.ts`).
+
+```ts
+// src/lib/r2.ts
+import 'server-only'
+import { S3Client, PutObjectCommand, HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
+
+const jurisdiction = process.env.R2_JURISDICTION // 'eu' or empty
 export const r2 = new S3Client({
   region: 'auto',
   endpoint: `https://${process.env.R2_ACCOUNT_ID}${jurisdiction ? `.${jurisdiction}` : ''}.r2.cloudflarestorage.com`,
@@ -971,582 +1023,932 @@ export const r2 = new S3Client({
     accessKeyId: process.env.R2_ACCESS_KEY_ID!,
     secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
   },
-  // Keep presigned URLs free of the SDK's default empty-body CRC32 params (R2 rejects them).
+  // Newer SDKs put an empty-body CRC32 checksum into presigned URLs, which can never match the real file.
+  // These two settings turn that off, as Cloudflare recommended.
   requestChecksumCalculation: 'WHEN_REQUIRED',
   responseChecksumValidation: 'WHEN_REQUIRED',
 })
+
+const BUCKET = process.env.R2_BUCKET!
+const MEDIA_URL = process.env.NEXT_PUBLIC_MEDIA_URL!
+const KEY_PATTERN = /^[a-z-]+\/\d{4}\/\d{2}\/[0-9a-f-]{36}\.(webp|jpg|png|gif)$/
+
+export function keyFromUrl(url: string): string | null {
+  if (!url.startsWith(`${MEDIA_URL}/`)) return null
+  const key = url.slice(MEDIA_URL.length + 1)
+  return KEY_PATTERN.test(key) ? key : null
+}
+
+export function presignUpload(key: string, contentType: string, size: number) {
+  return getSignedUrl(
+    r2,
+    new PutObjectCommand({ Bucket: BUCKET, Key: key, ContentType: contentType, ContentLength: size }),
+    // Content-Type is NOT signed unless listed here; ContentLength is signed automatically.
+    // An upload with a different type or size then fails the signature check.
+    { expiresIn: 300, signableHeaders: new Set(['content-type']) },
+  )
+}
+// + headObject(url) for the save-time check, deleteObject(url) for clean-up
 ```
 
-**Step 1: request upload URLs.** One Server Action handles up to 20 files, because actions run one at a time.
-
 ```ts
+// src/actions/uploads.ts
 'use server'
-export async function createUploadUrls(files: UploadRequest[]): Promise<ActionResult<UploadTicket[]>> {
-  await requireUser()
-  const input = UploadRequests.parse(files) // MIME allowlist + per-kind size limit, max 20 files
-  const tickets = await Promise.all(input.map(async (file) => {
-    const key = buildStorageKey(file) // media/2026/10/<uuid>-<slugified-name>.<ext from allowlist>
-    const url = await getSignedUrl(
-      r2,
-      new PutObjectCommand({ Bucket: env.R2_BUCKET, Key: key, ContentType: file.type, ContentLength: file.size }),
-      { expiresIn: 300, signableHeaders: new Set(['content-type']) }, // signs content-type + content-length
-    )
-    return { key, url }
-  }))
-  return { ok: true, data: tickets }
+import * as z from 'zod'
+import { requireAdmin } from '@/lib/auth'
+import { presignUpload } from '@/lib/r2'
+import { COLLECTION_SLUGS } from '@/config/collections'
+
+const EXT = { 'image/webp': 'webp', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif' } as const
+const Input = z.object({
+  collection: z.enum(COLLECTION_SLUGS),
+  contentType: z.enum(['image/webp', 'image/jpeg', 'image/png', 'image/gif']),
+  size: z.number().int().positive().max(10 * 1024 * 1024), // after browser processing
+})
+
+export async function createUploadUrl(input: { collection: string; contentType: string; size: number }) {
+  await requireAdmin()
+  const parsed = Input.safeParse(input)
+  if (!parsed.success) return { ok: false as const, error: 'This file type or size is not allowed.' }
+
+  const { collection, contentType, size } = parsed.data
+  const now = new Date()
+  const key = `${collection}/${now.getUTCFullYear()}/${String(now.getUTCMonth() + 1).padStart(2, '0')}/${crypto.randomUUID()}.${EXT[contentType]}`
+  return {
+    ok: true as const,
+    data: { uploadUrl: await presignUpload(key, contentType, size), url: `${process.env.NEXT_PUBLIC_MEDIA_URL}/${key}` },
+  }
 }
 ```
 
-**Step 2: the browser uploads each file with progress**, up to 4 in parallel.
+**Step 3: upload with a progress bar** (`src/lib/images/upload.ts`). `fetch` can't report upload progress, so this uses `XMLHttpRequest`.
 
 ```ts
-function putWithProgress(url: string, file: File, onProgress: (ratio: number) => void) {
+export function putWithProgress(url: string, blob: Blob, contentType: string, onProgress?: (ratio: number) => void) {
   return new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', url)
-    xhr.setRequestHeader('Content-Type', file.type) // must equal the signed value
-    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total)
+    xhr.setRequestHeader('Content-Type', contentType) // must equal the signed value
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total)
     xhr.onload = () => (xhr.status < 300 ? resolve() : reject(new Error(`Upload failed (${xhr.status})`)))
-    xhr.onerror = () => reject(new Error('Network/CORS error'))
-    xhr.send(file)
+    // An expired link returns 403 without CORS headers, so the browser reports it as a network error
+    xhr.onerror = () => reject(new Error('Upload failed. Check your connection and try again.'))
+    xhr.send(blob)
   })
 }
-```
 
-**Step 3: finalize.** The `finalizeUploads(items)` action does the following:
-
-1. Runs `requireUser()`.
-2. Validates each key matches the pattern `media/YYYY/MM/<uuid>-…`.
-3. Calls **`HeadObject`** and requires `ContentLength` and `ContentType` to match the declared values. On a mismatch it calls `DeleteObject` and reports an error.
-4. Inserts the `media` rows, taking width and height from the browser's `createImageBitmap()`.
-5. Emits `media.create` and returns DTOs.
-
-### 10.3 Allowed types and limits
-
-These defaults live in `src/lib/media/policy.ts` and are shared by client and server.
-
-| Kind | MIME types | Max size |
-|---|---|---|
-| image | `image/jpeg`, `image/png`, `image/webp`, `image/avif`, `image/gif` | 20 MB |
-| video | `video/mp4`, `video/webm` | 200 MB |
-| audio | `audio/mpeg`, `audio/mp4`, `audio/ogg`, `audio/wav` | 50 MB |
-| file | `application/pdf` (opt-in: csv, zip, docx, xlsx) | 50 MB |
-| SVG | `image/svg+xml` — **disabled by default** (stored-XSS risk); enable only with a CSP-sandbox header rule | — |
-
-- At most 20 files per batch, and presigned URLs live for 5 minutes.
-- A single PUT handles files up to about 5 GB. Multipart (resumable) upload for very large files is in the backlog.
-
-### 10.4 Delivery and image transformations
-
-- **Public URL.** `url = ${NEXT_PUBLIC_MEDIA_BASE_URL}/${storage_key}`. Keys never change, because replacing a file writes a new key.
-- **Resized URL.** With transformations on: `https://media.example.com/cdn-cgi/image/width=800,quality=75,format=auto/media/2026/10/<uuid>-hero.jpg`.
-- **Admin UI images.** The admin uses `next/image` with a custom loader. When transformations are off it falls back to `remotePatterns` and Next's optimizer.
-
-  ```ts
-  // src/lib/media/image-loader.ts
-  'use client'
-  import type { ImageLoaderProps } from 'next/image'
-
-  const BASE = process.env.NEXT_PUBLIC_MEDIA_BASE_URL!
-  export default function mediaLoader({ src, width, quality }: ImageLoaderProps) {
-    if (!src.startsWith(BASE)) return src // local /public assets pass through
-    const key = src.slice(BASE.length + 1)
-    return `${BASE}/cdn-cgi/image/width=${width},quality=${quality ?? 75},format=auto/${key}`
-  }
-  ```
-
-- **API media object.** It includes `url`. When transformations are enabled it also includes **`formats`**: transformation URLs at Strapi's breakpoints (thumbnail 245, small 500, medium 750, large 1000), only those smaller than the original. It includes `placeholder` when a thumbhash exists.
-
-### 10.5 Deleting and replacing
-
-- **Delete.**
-  1. Run the "used by" check ([§7.7](#77-relations-and-media-references)).
-  2. Show a confirmation dialog listing the entries that use the file.
-  3. Delete the DB row, then `DeleteObject` (a free operation).
-  4. If configured, purge the URL from the Cloudflare cache; this also purges its resized variants.
-  5. Emit `media.delete`.
-- **Bulk delete** runs the same steps in a loop. Avoid `DeleteObjects`: it is untested with R2 and recent SDK checksum changes.
-- **Replace file** (Phase 4 stretch):
-  1. Upload the new file to a **new key**.
-  2. Update `storage_key`, size and dimensions on the **same media row**. The ID stays the same, so content keeps working.
-  3. Delete the old object and purge its URL.
-
-### 10.6 Housekeeping
-
-- **Orphans** are objects uploaded but never finalized, for example when a tab is closed mid-upload. A weekly maintenance job (Vercel Cron → protected route, or a script) lists `media/` keys older than 24 h that have no DB row and deletes them.
-- **Optional:** an `after()` task fetches the object once, computes authoritative dimensions and a **thumbhash** placeholder with `sharp`, and updates the row.
-
----
-
-## 11. Public REST API
-
-### 11.1 Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/{pluralId}` | List published entries of a collection type |
-| `GET` | `/api/{pluralId}/{idOrUid}` | One entry, by UUID or by the type's UID field (e.g. its slug) |
-| `GET` | `/api/{singularId}` | A single type's entry (404 if unpublished) |
-| `GET` | `/api/health` | Liveness check (no DB access) |
-| `OPTIONS` | `/api/*` | CORS preflight |
-| `POST`/`PUT`/`DELETE` | same paths | **Write API, backlog** (full-access tokens) |
-
-These are implemented as `src/app/api/[apiId]/route.ts` and `src/app/api/[apiId]/[id]/route.ts`. Static routes such as `/api/health` take precedence over the dynamic segment, which is why those names are reserved.
-
-### 11.2 Authentication and permissions
-
-- **Header:** `Authorization: Bearer cms_…`.
-- **Token format:** `cms_` followed by 32 random bytes encoded as base64url.
-  - The token is shown **once** at creation.
-  - It is stored as `HMAC-SHA256(token, API_TOKEN_PEPPER)` and looked up by that hash. Rotating the pepper invalidates every token.
-- **Access types:**
-  - **`read_only`:** list and find on published content.
-  - **`full_access`:** additionally allows `status=draft` (preview), and later the write API.
-- **Duration:** 7, 30 or 90 days, or unlimited. Tokens can be **regenerated** (new secret, same row) or **revoked** (row deleted).
-- **Last used:** `last_used_at` is updated in `after()` at most once a minute per token.
-- **Public access.** Each content type has a `settings.publicRead` switch that allows list and find without a token. It is **off by default**, matching Strapi's Public role.
-- **Status codes:**
-  - `401` for a missing, invalid or expired token on a non-public type.
-  - `403` when the action isn't allowed, e.g. `status=draft` with a read-only token.
-  - `404` for an unknown type or entry, or an unpublished single type.
-
-### 11.3 Query parameters
-
-| Parameter | Example | Notes |
-|---|---|---|
-| `filters` | `filters[title][$containsi]=next` | Schema fields and system fields (`id`, `createdAt`, `updatedAt`, `publishedAt`). `$or`/`$and`/`$not` nest up to 3 levels. |
-| `_q` | `_q=hello` | Case-insensitive search across text-like fields |
-| `sort` | `sort=publishedAt:desc,title` | Several fields allowed. Default is the type's `defaultSort`, otherwise `createdAt:desc`. |
-| `pagination` | `pagination[page]=2&pagination[pageSize]=10` or `pagination[start]=0&pagination[limit]=10` | Default 25, max 100. `withCount` defaults to true. |
-| `fields` | `fields[0]=title&fields[1]=slug` | `id` and `documentId` are always included |
-| `populate` | `populate=*`, `populate[0]=author`, `populate[author][fields][0]=name` | Relations, 1 level deep (nested populate is in the backlog). Media is always populated. |
-| `status` | `status=draft` | Full-access tokens only; returns draft snapshots |
-| `richText` | `richText=json` | `html` (default) or `json` for rich-text fields |
-
-**Operators in v1:**
-- Comparison: `$eq $eqi $ne $nei $lt $lte $gt $gte $in $notIn $between`
-- Text matching: `$contains $notContains $containsi $notContainsi $startsWith $startsWithi $endsWith $endsWithi`
-- Null checks: `$null $notNull`
-- Logical: `$or $and $not`
-- Relation fields accept entry IDs with `$eq`, `$in`, `$null` and `$notNull`.
-- Filtering on fields of related entries (`filters[author][name][$eq]=…`) is in the backlog.
-
-**Parsing.** `qs.parse(search, { depth: 10, arrayLimit: 100, parameterLimit: 1000, strictDepth: true, throwOnLimitExceeded: true })`, then Zod validation. Any error returns **400**.
-
-### 11.4 Response format
-
-List response:
-
-```json
-{
-  "data": [
-    {
-      "id": "3f6c2c1e-0d3a-4c1b-9e43-6c1f0b7a2d55",
-      "documentId": "3f6c2c1e-0d3a-4c1b-9e43-6c1f0b7a2d55",
-      "title": "Uploading straight to R2",
-      "slug": "uploading-straight-to-r2",
-      "cover": {
-        "id": "6f1c0a52-8a4e-4c9b-9a51-2f7f5b0d1e11",
-        "url": "https://media.example.com/media/2026/10/6f1c0a52-hero.jpg",
-        "alternativeText": "An R2 bucket",
-        "caption": null,
-        "mime": "image/jpeg",
-        "sizeInBytes": 248113,
-        "width": 1600,
-        "height": 900,
-        "formats": {
-          "thumbnail": { "url": "https://media.example.com/cdn-cgi/image/width=245,format=auto/media/2026/10/6f1c0a52-hero.jpg", "width": 245, "height": 138 },
-          "small":     { "url": "https://media.example.com/cdn-cgi/image/width=500,format=auto/media/2026/10/6f1c0a52-hero.jpg", "width": 500, "height": 281 }
-        }
-      },
-      "author": "c3d2e5f6-…",
-      "createdAt": "2026-10-01T09:12:44.120Z",
-      "updatedAt": "2026-10-02T08:01:10.004Z",
-      "publishedAt": "2026-10-02T08:01:10.004Z"
-    }
-  ],
-  "meta": { "pagination": { "page": 1, "pageSize": 25, "pageCount": 1, "total": 1 } }
+/** prepare → presign → PUT. Returns what the image field stores. */
+export async function uploadImage(file: File, collection: string, opts: { maxSide?: number; onProgress?: (r: number) => void } = {}) {
+  const image = await prepareImage(file, opts.maxSide)
+  const res = await createUploadUrl({ collection, contentType: image.type, size: image.blob.size })
+  if (!res.ok) throw new Error(res.error)
+  await putWithProgress(res.data.uploadUrl, image.blob, image.type, opts.onProgress)
+  return { url: res.data.url, width: image.width, height: image.height }
 }
 ```
 
-- A single-entry response is `{ "data": { … }, "meta": {} }`.
-- Errors look like `{ "data": null, "error": { "status": 400, "name": "ValidationError", "message": "Unknown operator \"$regex\" on field \"title\"", "details": {} } }`.
-- `documentId` is a Strapi-compatibility alias of `id`.
+**Step 4: saving the item.** The image field's value is `{ url, alt, width, height }`. It is written to the `image_*` columns when the item is saved ([§11.5](#115-server-actions)).
 
-### 11.5 Query compilation (`src/server/query/*`)
+### 8.4 Rules & limits
 
-- **Whitelisting.** Only fields from the content-type schema plus system fields are accepted. Private fields can't be filtered or sorted on by API callers.
-- **No string-built SQL.** Field names are passed as **bound parameters** (`published_data->>$1`), never concatenated into SQL.
-- **Source.** Reads come from `published_data is not null` by default, or `draft_data` for `status=draft`.
-- **Typed comparisons:**
-
-  | Field kind | SQL expression |
-  |---|---|
-  | text-like | `data->>f` |
-  | number | `(data->>f)::numeric` |
-  | boolean | `(data->>f)::boolean` |
-  | date | `(data->>f)::date` |
-  | datetime | `(data->>f)::timestamptz` |
-
-  These casts are safe because writes are validated and field types can't change.
-- **Equality uses the GIN index.** `$eq` on scalar fields compiles to containment, `data @> '{"slug":"x"}'`, which the `jsonb_path_ops` GIN index serves. That keeps slug lookups fast.
-- **`LIKE` operators** escape `%` and `_`; the `i` variants use `ILIKE`.
-- **Sorting** uses the typed expression with `NULLS LAST`, then `id`, so pagination is stable.
-- **Limits:** page size ≤ 100, at most 20 conditions, and API queries run in a read-only transaction with `SET LOCAL statement_timeout = '5s'`.
-- **Shared engine.** The admin list view uses the same engine with `source = draft`: one code path, one test suite.
-
-### 11.6 CORS and caching
-
-- **CORS.**
-  - `API_CORS_ORIGINS` is a comma-separated list or `*`.
-  - Responses send `Access-Control-Allow-Headers: Authorization, Content-Type` and `Vary: Origin`.
-  - Route Handlers export `OPTIONS` for preflight.
-- **Caching.**
-  - Responses to token holders and drafts get `Cache-Control: private, no-store`.
-  - Public responses use `API_PUBLIC_CACHE_SECONDS` (default `0`, i.e. `no-store`).
-  - Don't cache at the CDN when consumers refresh on webhooks: the webhook could fire while the CDN still holds stale data.
-- **Recommended consumer pattern (a Next.js website).**
-  - Tag cached CMS reads, e.g. `cms:articles`.
-  - Add a webhook route that verifies the signature ([§12](#12-webhooks)) and calls `revalidateTag('cms:articles', 'max')`.
-
----
-
-## 12. Webhooks
-
-- **Configuration fields:**
-  - name;
-  - URL (HTTPS required, except `localhost` in dev);
-  - event checkboxes;
-  - custom headers;
-  - a **signing secret** (auto-generated, can be revealed and rotated);
-  - an enabled switch.
-- **Events:**
-  - `entry.create`, `entry.update`, `entry.delete`, `entry.publish`, `entry.unpublish`;
-  - `media.create`, `media.update`, `media.delete`;
-  - the "Send test" button sends `trigger-test`.
-- **Payload.** `entry` is serialized like the API: private fields removed, relations as IDs, media populated. Publish events send the published snapshot, create/update send the draft, delete sends the last known data.
-
-  ```json
-  {
-    "event": "entry.publish",
-    "createdAt": "2026-10-02T10:00:00.000Z",
-    "model": "article",
-    "contentType": { "id": "…", "singularId": "article", "pluralId": "articles", "kind": "collection" },
-    "entry": { "id": "…", "title": "Uploading straight to R2", "slug": "uploading-straight-to-r2", "publishedAt": "…" }
-  }
-  ```
-
-- **Headers:**
-  - `Content-Type: application/json`
-  - `User-Agent: cms-webhooks/1`
-  - `X-CMS-Event`
-  - `X-CMS-Delivery: <uuid>`
-  - `X-CMS-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<raw body>")>`
-  - plus your custom headers.
-- **Delivery.**
-  - Runs in `after()`, with webhooks sent in parallel.
-  - Each request has a **10 s timeout**.
-  - Network errors, `5xx` and `429` get **up to 3 attempts** (immediately, +2 s, +10 s).
-  - Every attempt is logged, and the last 100 deliveries per webhook are kept.
-- **Verifying on the receiver** (Node):
-
-  ```ts
-  import { createHmac, timingSafeEqual } from 'node:crypto'
-
-  export function verifyCmsSignature(rawBody: string, header: string, secret: string) {
-    const parts = Object.fromEntries(header.split(',').map((p) => p.split('=') as [string, string]))
-    const expected = createHmac('sha256', secret).update(`${parts.t}.${rawBody}`).digest('hex')
-    const fresh = Math.abs(Date.now() / 1000 - Number(parts.t)) < 300
-    return fresh && expected.length === parts.v1?.length && timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1))
-  }
-  ```
-
-- **Durable delivery** through a queue (Supabase Queues, Vercel Queues or QStash) is in the backlog.
-
----
-
-## 13. Admin UI
-
-### 13.1 Principles
-
-- **Our own look** on top of shadcn/ui (Base UI primitives): calm, dense and readable, with light, dark and system themes. Themes use Next's inline-script pattern, not `next-themes`.
-- **Keyboard-first:** ⌘K command palette, ⌘S to save, sensible focus order, and visible focus rings.
-- **Never lose work:** an unsaved-changes guard, optimistic locking, and clear inline field errors.
-- **Fast feedback:** toasts for results, skeletons while loading, and empty states that teach.
-- **Accessible:** proper labels, ARIA from the primitives, and colour contrast checked.
-
-### 13.2 Route map
-
-| Route | Screen |
+| Rule | Value |
 |---|---|
-| `/login` | Sign in |
-| `/admin` | Dashboard |
-| `/admin/content/[type]` | Entries list (collection type) or the editor (single type) |
-| `/admin/content/[type]/new` | New entry |
-| `/admin/content/[type]/[entryId]` | Edit entry |
-| `/admin/content-types` | Content-Type Builder: all types |
-| `/admin/content-types/[id]` | Edit a type's fields and settings |
-| `/admin/components` *(P8)* | Components |
-| `/admin/media` | Media library |
-| `/admin/settings/api-tokens` | API tokens |
-| `/admin/settings/webhooks`, `/admin/settings/webhooks/[id]` | Webhooks and their delivery log |
-| `/admin/settings/users` | Admin users (read-only list, activate/deactivate) |
-| `/admin/settings/profile` | Your display name |
+| Accepted files | JPG, PNG, WebP, AVIF, GIF and HEIC. iPhones hand photos from the photo library to the browser as JPEG. A HEIC file only works in Safari; other browsers show "please convert it to JPG". The file input uses `accept="image/*"`; don't add `image/heic` to it, because Safari would then convert JPEGs *to* HEIC. |
+| Maximum file chosen | 25 MB |
+| Stored size | Longest side **2000 px** for main images and **1600 px** for images in rich text |
+| Stored format | **WebP** (quality 0.82) from Chrome, Edge and Firefox. **JPEG** (quality 0.85) from Safari, which can't encode WebP. Transparent areas become white. GIFs are kept as they are. |
+| Maximum upload (server check) | 10 MB |
+| Not allowed | SVG (can carry scripts), PDF, video |
+| Upload URL lifetime | 5 minutes, valid for one exact type and size |
 
-`[type]` is the content type's singular API ID, e.g. `/admin/content/article/3f6c…`.
+### 8.5 Checks on save
 
-### 13.3 Screens
+- **The URL must be one of ours.** `image_url` must start with `NEXT_PUBLIC_MEDIA_URL/` and match the key pattern, so the database can't point at random external images.
+- **The file must exist.** When the image changed, the server runs **`HeadObject`** to confirm the file exists, is an allowed type and is within the size limit.
+- **Inline images** in rich text are restricted to the same domain by the HTML sanitizer ([§9.3](#93-cleaning-the-html-on-the-server)).
 
-**Login**
-- A centred card with the app name, email and password fields, and a "Sign in" button with a pending spinner.
-- Failed logins show one generic error.
-- The footer reads "Access is by invitation only." There are no sign-up or forgot-password links.
+### 8.6 Deleting images
 
-**App shell** (shadcn `sidebar-07`, collapsible to icons)
-- Sidebar groups:
-  - **Content:** collection types, then single types.
-  - **Build:** Content-Type Builder, plus Components in phase 8.
-  - **Media.**
-  - **Settings.**
-- Header: breadcrumbs, a ⌘K button, the theme toggle, and the user menu (profile, sign out).
+| Event | What happens in R2 |
+|---|---|
+| Main image replaced or removed, then saved | The old file is deleted **after** the save succeeds (`after()`) |
+| Item deleted | Its main image is deleted after the row is deleted |
+| Image inside rich text removed, or an upload abandoned (image chosen, page left without saving) | The file stays. The **"Clean up unused images"** tool in Phase 8 finds files older than 24 h that no row references and deletes them. At this scale the leftovers cost nothing (10 GB is free). |
 
-**Dashboard** (Phase 7)
-- Entry counts per type, plus drafts and modified entries waiting.
-- Media count and storage used.
-- Recently edited entries.
-- Quick-create buttons.
-- The API base URL.
+Deleting a file doesn't instantly clear Cloudflare's CDN cache. **If something sensitive was published by mistake,** delete the item, then purge its image URL in Cloudflare under **Caching → Configuration → Purge Cache → Custom purge**.
 
-**Entries list**
-- **Toolbar:**
-  - search box (debounced, kept in the URL);
-  - status filter: all / draft / published / modified;
-  - field filters, starting with enumeration, boolean and relation;
-  - column picker, saved to `settings.listColumns`;
-  - page size: 10, 20, 50 or 100.
-- **Table** (TanStack Table v9, server-side):
-  - selection checkboxes;
-  - the display field as a link;
-  - your chosen columns;
-  - a status badge;
-  - "updated" as a relative time;
-  - a row menu: edit, duplicate, delete.
-- **Bulk bar:** Publish, Unpublish, Delete, with a per-entry error report, e.g. "3 published, 1 failed: *title is required*".
-- **State lives in the URL** via nuqs: `?q=&status=&sort=title:asc&page=2&pageSize=20`.
+### 8.7 Privacy
 
-**Entry editor**
-- **Header:** back link, the entry title (or "Untitled"), and a status badge.
-- **Main column:** the generated form on a 12-column grid.
-- **Right sidebar:**
-  - an **Entry** card with Save, Publish/Unpublish, Discard changes, and a more-menu (Duplicate, Delete, Copy ID, Open in API, Preview);
-  - an **Info** card with created/updated by and at, published at, and first published at.
-- **Behaviour:**
-  - On publish, failing fields are highlighted and the first one is scrolled into view.
-  - The relation picker searches the target type's display field.
-  - The UID field generates from its target field and shows whether the value is free.
+Visa stamps, work permits and client photos contain **personal data**, so the GDPR applies.
 
-**Content-Type Builder**
-- **Index:** every type with its field and entry counts, and "Create content type".
-- **Create dialog:**
-  - display name, from which singular and plural IDs are filled in (editable);
-  - kind: collection or single;
-  - Draft & Publish toggle.
-- **Type editor:**
-  - a field list you reorder by dragging (dnd-kit). Each row shows the type icon, name, label and badges such as *required*, *unique* or *private*.
-  - **Add field:** a grid of types → a settings dialog with *Basic* and *Advanced* tabs.
-  - **Type settings:** display field, list columns, default sort, public read, description, preview URL.
-  - **Save** shows a confirmation of the data impact when there are renames or deletes, then runs the transaction from [§7.8](#78-schema-evolution-rules).
-- **API tab:** endpoint URLs, ready-to-copy `curl` and `fetch` examples, and a sample response generated from the schema (Phase 5).
-
-**Media library**
-- **Toolbar:** search, type filter, sort, grid/list toggle, upload button. The whole page is a drop zone.
-- **Upload queue panel:** per-file progress, errors with retry, and cancel.
-- **Detail sheet:** large preview, editable name/alt text/caption, copy URL, dimensions and size, "Used by", Replace, Delete.
-- **Picker dialog:** the same grid inside a dialog, with single or multiple selection, the field's allowed types pre-filtered, and an upload tab. Used by media fields and by the Tiptap image button.
-
-**Settings**
-- **API tokens:**
-  - a list with name, type, hint, created, expires and last used;
-  - create → a reveal-once dialog with a copy button;
-  - regenerate and delete.
-- **Webhooks:** list → editor (events, headers, secret) → deliveries table with "Send test".
-- **Users:**
-  - email, name, role, active and last sign-in (read from `auth.users`);
-  - the owner can deactivate users;
-  - a note explaining that users are created in the Supabase dashboard.
-- **Profile:** your display name.
-
-### 13.4 Form engine
-
-- `buildEntrySchema(ct, mode)` → `zodResolver`. Submit **plain objects** (not `FormData`) to Server Actions. Map server `fieldErrors` back to fields with `setError`.
-- Inputs connect through react-hook-form `Controller`. Use `useWatch` rather than `watch`; it works with the React Compiler, which is relevant for UID generation and conditional UI.
-- Tiptap and CodeMirror load lazily (`next/dynamic`, `ssr: false`). Tiptap uses `immediatelyRender: false`, and its Link extension rejects `javascript:` URLs.
-- *(P8)* Repeatables and dynamic zones use `useFieldArray` + `move()` driven by dnd-kit's `onDragEnd`. Each item has a stable `__id` (nanoid).
+- **Blur before uploading:** passport numbers, the machine-readable (MRZ) lines, dates of birth, signatures, and the faces of people who haven't agreed. The editor shows this reminder above the image field for visa stamps and work permits.
+- **Keep names short.** A first name or initials is enough in `person_name`.
+- **Get the person's consent** before publishing their story, photo or document. Keep that record outside the CMS.
+- **Location data is stripped.** Re-encoding in the browser removes GPS and other EXIF data from phone photos automatically. GIFs are not re-encoded, so don't use GIFs for documents.
+- **Images are public once uploaded.** Anyone with the URL can open them, even while the item is a draft. The random file names make the URLs impossible to guess.
 
 ---
 
-## 14. Project structure
+## 9. Rich-text editor
+
+Used by `blog.content`, `news.content` and `success_stories.content`.
+
+### 9.1 What it can do
+
+- **Toolbar:** paragraph, H2, H3, H4, bold, italic, underline, strikethrough, bulleted list, numbered list, quote, link, image, horizontal line, undo and redo.
+- **Images:**
+  - The **image button** opens a small dialog: choose a file, type the alt text, Insert. The image is resized (1600 px max), uploaded to R2, and inserted as `<img src alt width height>`.
+  - **Pasted or dropped image files** are uploaded the same way. Base64 images are never embedded.
+- **Pasting from Word or Google Docs** keeps headings, lists and links. Anything the editor doesn't support, such as fonts, colours or tables, is dropped.
+- **Links:** added with a dialog and opened in a new tab (`target="_blank" rel="noopener noreferrer nofollow"`). Tiptap's link validator already refuses `javascript:`, `data:` and `vbscript:` links, and the server only keeps `http(s)`, `mailto` and `tel`.
+
+### 9.2 Editor setup
+
+```tsx
+// src/components/editor/rich-text-editor.tsx (simplified)
+'use client'
+import { useEditor, EditorContent } from '@tiptap/react'
+import StarterKit from '@tiptap/starter-kit'
+import Image from '@tiptap/extension-image'
+import FileHandler from '@tiptap/extension-file-handler'
+import { Placeholder } from '@tiptap/extensions'
+
+// FileHandler matches file.type exactly: no wildcards
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/avif', 'image/gif', 'image/heic', 'image/heif']
+
+export function RichTextEditor({ value, onChange, collection }: Props) {
+  const editor = useEditor({
+    immediatelyRender: false, // required with SSR in Next.js
+    extensions: [
+      StarterKit.configure({
+        heading: { levels: [2, 3, 4] },
+        code: false,
+        codeBlock: false,
+        link: { openOnClick: false, defaultProtocol: 'https' },
+      }),
+      Image, // defaults: block image, allowBase64: false
+      FileHandler.configure({
+        allowedMimeTypes: IMAGE_TYPES,
+        consumePasteEvent: true, // otherwise pasted HTML may add the same image a second time
+        onDrop: (ed, files, pos) => files.forEach((f) => insertUploaded(ed, f, collection, pos)),
+        onPaste: (ed, files) => files.forEach((f) => insertUploaded(ed, f, collection, ed.state.selection.anchor)),
+      }),
+      Placeholder.configure({ placeholder: 'Start writing…' }),
+    ],
+    content: value,
+    onUpdate: ({ editor }) => onChange(editor.isEmpty ? '' : editor.getHTML()),
+  })
+  return (
+    <div className="rounded-md border">
+      <Toolbar editor={editor} collection={collection} />
+      <EditorContent editor={editor} className="prose max-w-none p-4" />
+    </div>
+  )
+}
+```
+
+- **`insertUploaded()`:**
+  - calls `uploadImage(file, collection, { maxSide: 1600 })`;
+  - then runs `editor.chain().insertContentAt(pos, { type: 'image', attrs: { src, alt, width, height } }).run()`;
+  - while it runs, the toolbar shows "Uploading image… 45%".
+- **Never insert a file as a `data:` URL** (Tiptap's own FileHandler demo does). `allowBase64: false` only stops data-URL images *pasted as HTML*, not images inserted by code. The server sanitizer is the backstop: it drops any image that isn't on our media domain.
+- **Toolbar state:** in Tiptap 3 the editor doesn't re-render React on every keystroke. The toolbar reads active states, such as "bold is on", with `useEditorState({ editor, selector })`.
+- **The editor is loaded only in the browser,** inside a client-only form ([§11.1](#111-collection-config)).
+- **Styling:** add `@tailwindcss/typography` (the `prose` class), so the editor looks like the website.
+
+### 9.3 Cleaning the HTML on the server
+
+Everything the browser sends is untrusted. The save action runs the HTML through an allowlist before storing it, so the website can render it safely.
+
+```ts
+// src/lib/sanitize.ts
+import 'server-only'
+import sanitizeHtml from 'sanitize-html'
+
+// The trailing slash also blocks look-alikes such as media.example.com.evil.com or media.example.com@evil.com
+const MEDIA_PREFIX = `${process.env.NEXT_PUBLIC_MEDIA_URL}/`
+
+export function sanitizeRichText(html: string): string {
+  const clean = sanitizeHtml(html, {
+    allowedTags: ['p', 'br', 'h2', 'h3', 'h4', 'strong', 'em', 'u', 's', 'blockquote', 'ul', 'ol', 'li', 'hr', 'a', 'img'],
+    allowedAttributes: {
+      a: ['href', 'rel', { name: 'target', values: ['_blank'] }],
+      img: ['src', 'alt', 'title', 'width', 'height'],
+      ol: ['start'],
+    },
+    allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+    allowedSchemesByTag: { img: ['https'] },
+    allowProtocolRelative: false,
+    transformTags: {
+      // Runs before attribute filtering, which is why `rel` is allowed above
+      a: (tagName, attribs) => {
+        if (attribs.target === '_blank') attribs.rel = 'noopener noreferrer nofollow'
+        else delete attribs.target
+        return { tagName, attribs }
+      },
+    },
+    exclusiveFilter: (frame) =>
+      frame.tag === 'img'
+        ? !(frame.attribs.src ?? '').startsWith(MEDIA_PREFIX) // only our own images
+        : frame.tag === 'a' && !frame.attribs.href
+          ? 'excludeTag' // unwrap links whose href was removed (e.g. javascript:), keep the text
+          : false,
+  })
+  return clean === '<p></p>' ? '' : clean
+}
+```
+
+This configuration was tested with sanitize-html 2.18 in a Next 16.3.8 server action (Turbopack build):
+- `<script>`, `<style>`, `<iframe>`, `onerror=…`, `style=…` and stray classes are removed.
+- `javascript:` links are unwrapped, including `&colon;`-encoded and protocol-relative (`//…`) forms.
+- Images from other hosts, `data:` images and `http:` images are dropped, and so are look-alike hosts.
+
+sanitize-html is CommonJS and needs Node ≥ 22.12. It installs 17 packages, about 4 MB. The alternative, isomorphic-dompurify, pulls in jsdom: 40 packages, about 28 MB.
+
+### 9.4 What gets stored
+
+```html
+<h2>How long does it take?</h2>
+<p>Most <strong>work permits</strong> take 4–8 weeks. See the
+  <a href="https://www.gov.pl/web/udsc" target="_blank" rel="noopener noreferrer nofollow">official page</a>.</p>
+<img src="https://media.example.com/blog/2026/10/7c9e6679-7425-40de-944b-e07fc1f90ae7.webp" alt="Our Warsaw office" width="1600" height="1067">
+```
+
+---
+
+## 10. CMS screens
+
+### 10.1 Routes
+
+| URL | Screen |
+|---|---|
+| `/login` | Login |
+| `/` | Home dashboard |
+| `/blog`, `/news`, `/success-stories`, `/testimonials`, `/visa-stamps`, `/work-permits` | List for that type |
+| `/<type>/new` | Create |
+| `/<type>/<id>` | Edit |
+
+These are implemented with one dynamic segment, `src/app/(cms)/[collection]/…`. An unknown type name, or an `id` that isn't a UUID, shows a 404.
+
+### 10.2 Login
+
+- A centred card with the app name, **Email**, **Password**, and a **Sign in** button with a spinner.
+- One generic error message ("Invalid email or password"), plus "Too many attempts" when rate-limited.
+- The footer reads "Access by invitation only." There are no sign-up or forgot-password links.
+
+### 10.3 Layout (app shell)
+
+- **Sidebar** (shadcn `Sidebar`, collapses to a drawer on phones):
+  - **Home**;
+  - **Content:** the six types with icons;
+  - at the bottom: **Open website ↗**, your email, and **Sign out**.
+- **Header:** breadcrumbs (Home / Blog / Edit).
+- The CMS is told **never to be indexed** by search engines, through the `robots` metadata, `robots.txt` and an `X-Robots-Tag` header.
+
+### 10.4 Home
+
+```text
+┌───────────────────┬──────────────────────────────────────────────────────────┐
+│ CMS               │ Home                                                     │
+│                   │                                                          │
+│ Home              │ ┌────────────────┐ ┌────────────────┐ ┌────────────────┐ │
+│ Content           │ │ Blog           │ │ News           │ │ Success stories│ │
+│   Blog            │ │ 12 published   │ │ 8 published    │ │ 5 published    │ │
+│   News            │ │ 3 drafts       │ │ 1 draft        │ │ 0 drafts       │ │
+│   Success stories │ │ [+ Add] [View] │ │ [+ Add] [View] │ │ [+ Add] [View] │ │
+│   Testimonials    │ └────────────────┘ └────────────────┘ └────────────────┘ │
+│   Visa stamps     │ ┌────────────────┐ ┌────────────────┐ ┌────────────────┐ │
+│   Work permits    │ │ Testimonials   │ │ Visa stamps    │ │ Work permits   │ │
+│                   │ │ 20 published   │ │ 64 published   │ │ 41 published   │ │
+│ Open website ->   │ │ 2 drafts       │ │ 5 drafts       │ │ 0 drafts       │ │
+│ you@...  Sign out │ │ [+ Add] [View] │ │ [+ Add] [View] │ │ [+ Add] [View] │ │
+│                   │ └────────────────┘ └────────────────┘ └────────────────┘ │
+└───────────────────┴──────────────────────────────────────────────────────────┘
+```
+
+Each card shows the type's icon, name, a one-line description, its published and draft counts, and **+ Add** / **View** (the list) buttons.
+
+### 10.5 List
+
+- **Header:** the type name and a **New blog post** button.
+- **Toolbar:** a search box (title, or name / country for image types) and the tabs **All / Published / Drafts**.
+- **Table** for text types:
+  - thumbnail, title, status badge (**Draft** / **Published** / **Scheduled** when the publish date is in the future), publish date, last updated;
+  - clicking a row opens the editor;
+  - the row menu has **Edit**, **Publish/Unpublish**, **View on website** and **Delete** (with a confirmation dialog).
+- **Grid of image cards** for **visa stamps** and **work permits**, because those are mostly pictures.
+- **Pagination:** 20 per page, with Previous / Next.
+- **The state lives in the URL**, e.g. `/blog?q=visa&status=draft&page=2`, so Back and Refresh work.
+- **Empty state:** "No blog posts yet" with a **Create the first one** button.
+
+### 10.6 Editor
+
+```text
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ <- Blog   New blog post        Draft  [Save draft] [Publish]                 │
+├────────────────────────────────────────────────────┬─────────────────────────┤
+│ Title                                              │ Publish date            │
+│ [How to get a Polish work visa                ]    │ [2026-10-02  10:00]     │
+│ URL slug  /blog/[how-to-get-a-polish-work-visa]    │ (empty = when published)│
+│ Short summary                           86/300     │─────────────────────────│
+│ [.............................................]    │ Cover image             │
+│ Content                                            │ ┌─────────────────────┐ │
+│ ┌─────────────────────────────────────────────┐    │ │ Drop an image or    │ │
+│ │ H2 H3 | B I U S | List 1. Quote | Link Img  │    │ │ click to choose     │ │
+│ ├─────────────────────────────────────────────┤    │ └─────────────────────┘ │
+│ │                                             │    │ Alt text [...........]  │
+│ │                                             │    │ Author   [...........]  │
+│ └─────────────────────────────────────────────┘    │ Tags  [visa x] [+]      │
+│ > SEO (optional)                                   │                         │
+└────────────────────────────────────────────────────┴─────────────────────────┘
+```
+
+**Buttons by state**
+
+| Item state | Main button | Other actions |
+|---|---|---|
+| New | **Publish** | Save draft |
+| Draft | **Publish** | Save draft · Delete |
+| Published | **Save changes** (goes live immediately) | Unpublish · View on website · Delete |
+
+**Behaviour**
+- **Slug:** fills in from the title as you type, until you edit it yourself. Changing the slug of a *published* item shows a warning that old links will break.
+- **Publish:** checks the *Publish* fields, highlights what's missing and scrolls to the first problem. Save draft only needs the *Always* fields.
+- **Image uploads:** **Save** is disabled while an image is still uploading.
+- **After saving:**
+  - a new item's URL becomes `/blog/<id>`;
+  - a toast says "Draft saved", "Published" or "Changes saved".
+- **Unsaved changes:** the browser warns before you leave or reload, and **Ctrl/⌘ + S** saves.
+- **Edit conflicts:** if someone saved this item after you opened it, saving shows "This item was changed by someone else. Reload to see the latest version." Nothing is overwritten silently.
+- **Mobile:** works on phones. One column, and the image input opens the camera or photo library, which is handy for uploading visa stamps from a phone.
+
+---
+
+## 11. How the code works
+
+### 11.1 Collection config
+
+`src/config/collections.ts` is the single description of the six types. The list page, editor, validation and actions all read it.
+
+```ts
+import type { LucideIcon } from 'lucide-react'
+import type { Database } from '@/lib/supabase/database.types'
+
+export type ContentTable = Exclude<keyof Database['public']['Tables'], 'admins'>
+export type Row = Record<string, unknown>
+
+export type FieldType =
+  | 'text' | 'textarea' | 'slug' | 'richtext' | 'image'
+  | 'url' | 'date' | 'country' | 'rating' | 'tags' | 'boolean'
+
+export type FieldConfig = {
+  name: string                         // column name; 'image' maps to image_url/_alt/_width/_height
+  label: string
+  type: FieldType
+  required?: 'always' | 'publish'      // omitted = optional
+  maxLength?: number
+  help?: string
+  placement?: 'main' | 'side' | 'seo'  // where the editor shows it (default 'main')
+  from?: string                        // slug: which field it is generated from
+}
+
+export type CollectionConfig = {
+  slug: string                         // URL segment and R2 folder: 'success-stories'
+  table: ContentTable                  // 'success_stories'
+  label: string                        // 'Success stories'
+  singular: string                     // 'Success story'
+  description: string                  // shown on the home card
+  icon: LucideIcon
+  fields: FieldConfig[]
+  list: { columns: string[]; searchField: string; view?: 'table' | 'grid' }
+  displayTitle: (row: Row) => string   // list rows, page titles, breadcrumbs
+  websitePath?: (row: Row) => string   // "View on website" (adjust to your site's URLs)
+  privacyNotice?: boolean              // the "blur personal data" reminder
+}
+```
+
+Example: the blog entry. The other five follow the field tables in [§6.2](#62-fields-per-table-proposed).
+
+```ts
+{
+  slug: 'blog',
+  table: 'blog',
+  label: 'Blog',
+  singular: 'Blog post',
+  description: 'Articles and guides',
+  icon: BookOpen,
+  fields: [
+    { name: 'title', label: 'Title', type: 'text', required: 'always', maxLength: 200 },
+    { name: 'slug', label: 'URL slug', type: 'slug', required: 'always', from: 'title' },
+    { name: 'excerpt', label: 'Short summary', type: 'textarea', required: 'publish', maxLength: 300,
+      help: 'Shown on cards and in search results.' },
+    { name: 'content', label: 'Content', type: 'richtext', required: 'publish' },
+    { name: 'image', label: 'Cover image', type: 'image', placement: 'side' },
+    { name: 'author_name', label: 'Author', type: 'text', maxLength: 100, placement: 'side' },
+    { name: 'tags', label: 'Tags', type: 'tags', placement: 'side' },
+    { name: 'seo_title', label: 'SEO title', type: 'text', maxLength: 70, placement: 'seo' },
+    { name: 'seo_description', label: 'SEO description', type: 'textarea', maxLength: 160, placement: 'seo' },
+  ],
+  list: { columns: ['image', 'title', 'status', 'published_at', 'updated_at'], searchField: 'title' },
+  displayTitle: (row) => String(row.title),
+  websitePath: (row) => `/blog/${row.slug}`,
+}
+```
+
+**How the pages use it**
+- `src/app/(cms)/[collection]/page.tsx` does `getCollection(slug) ?? notFound()`, loads rows with `listItems()`, and renders `<ItemsTable>` or `<ItemsGrid>`.
+- The new and edit pages load the row (edit only) and render `<ItemFormLoader collection=… initialValues=… updatedAt=…>`.
+- That loader is a Client Component which imports the form with `next/dynamic(…, { ssr: false })`. The form uses browser-only APIs (Tiptap, canvas, the local time zone), so it never renders on the server and can't cause hydration mismatches.
+- `published_at` is a standard field on every type, so it isn't in `fields`. The editor always shows it in the side column.
+
+### 11.2 Field types
+
+| Type | Input | Form value | Stored as |
+|---|---|---|---|
+| `text` | Input with a character counter when `maxLength` is set | `string` | `text` (empty → `null`) |
+| `textarea` | Auto-growing textarea with a counter | `string` | `text` (empty → `null`) |
+| `slug` | Input with a `/blog/` prefix and **Generate**; auto-follows `from` until edited | `string` | `text`, unique |
+| `richtext` | Tiptap editor ([§9](#9-rich-text-editor)) | HTML `string` | sanitized HTML (empty → `''`) |
+| `image` | Drop zone → preview + progress → alt text, Replace, Remove | `{ url, alt, width, height } \| null` | `image_url`, `image_alt`, `image_width`, `image_height` |
+| `url` | `<input type="url">` | `string` | `text` (`http(s)://` only) |
+| `date` | `<input type="date">` | `'YYYY-MM-DD'` | `date` |
+| `country` | Input with a country `datalist` | `string` | `text` |
+| `rating` | Five clickable stars, plus "no rating" | `number \| null` | `smallint` 1–5 |
+| `tags` | Type and press Enter → chips (lowercase, unique, max 10) | `string[]` | `text[]` |
+| `boolean` | Switch | `boolean` | `boolean` |
+| *(standard)* publish date | `<input type="datetime-local">` in the admin's time zone | ISO string or `''` | `timestamptz` (empty → set on publish) |
+
+Each type is one component in `src/components/fields/`. A small registry maps a type to its component, its Zod rule and its row mapping.
+
+### 11.3 Validation: draft vs publish
+
+One builder, used both by react-hook-form in the browser and by the Server Actions:
+
+```ts
+// src/lib/schemas.ts (shared)
+import * as z from 'zod'
+
+export type SaveMode = 'draft' | 'publish'
+const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/
+const MEDIA_URL = process.env.NEXT_PUBLIC_MEDIA_URL!
+const emptyToNull = (v: string) => v || null
+
+function rule(field: FieldConfig): z.ZodType {
+  switch (field.type) {
+    case 'text':
+    case 'textarea':
+    case 'country':  return z.string().trim().max(field.maxLength ?? 200).transform(emptyToNull)
+    case 'slug':     return z.string().trim().max(120).regex(SLUG, 'Use lowercase letters, numbers and hyphens').or(z.literal('')).transform(emptyToNull)
+    case 'richtext': return z.string().max(500_000)
+    case 'url':      return z.url({ protocol: /^https?$/ }).or(z.literal('')).transform(emptyToNull)
+    case 'date':     return z.iso.date().or(z.literal('')).transform(emptyToNull)
+    case 'rating':   return z.number().int().min(1).max(5).nullable()
+    case 'tags':     return z.array(z.string().trim().toLowerCase().min(1).max(30)).max(10)
+    case 'boolean':  return z.boolean()
+    case 'image':    return z.object({
+                       url: z.url().refine((u) => u.startsWith(`${MEDIA_URL}/`), 'Upload the image here'),
+                       alt: z.string().trim().max(200),
+                       width: z.number().int().positive().nullable(),
+                       height: z.number().int().positive().nullable(),
+                     }).nullable()
+  }
+}
+
+const hasValue = (v: unknown) =>
+  v !== null && v !== '' && !(Array.isArray(v) && v.length === 0)
+
+export function buildSchema(collection: CollectionConfig, mode: SaveMode) {
+  const shape: Record<string, z.ZodType> = {
+    published_at: z.iso.datetime({ offset: true }).or(z.literal('')).transform(emptyToNull),
+  }
+  for (const field of collection.fields) {
+    const needed = field.required === 'always' || (field.required === 'publish' && mode === 'publish')
+    shape[field.name] = needed ? rule(field).refine(hasValue, 'Required') : rule(field)
+  }
+  return z.object(shape)
+}
+```
+
+- **Which schema runs:** the editor validates with the *draft* schema on **Save draft**, and with the *publish* schema on **Publish** and **Save changes** (published items).
+- **In the browser**, the resolver reads the mode from a ref that is set just before `handleSubmit`.
+- **On the server**, the action always re-validates with the schema for the status being saved. Unknown keys are dropped.
+
+### 11.4 Reading data
+
+`src/lib/items.ts` (server-only). Each function calls `requireAdmin()` first (the data-access-layer pattern).
+
+```ts
+const PAGE_SIZE = 20
+
+export async function listItems(collection: CollectionConfig, params: { q?: string; status?: 'draft' | 'published'; page: number }) {
+  await requireAdmin()
+  const supabase = await createClient()
+  const from = (params.page - 1) * PAGE_SIZE
+
+  let query = supabase.from(collection.table).select('*', { count: 'exact' })
+  if (params.status) query = query.eq('status', params.status)
+  if (params.q) query = query.ilike(collection.list.searchField, `%${params.q.replace(/[%_\\]/g, '')}%`)
+
+  const { data, count, error } = await query
+    .order('updated_at', { ascending: false })
+    .range(from, from + PAGE_SIZE - 1) // filters first, then order/range
+  if (error) throw error
+  return { rows: data, total: count ?? 0, pageSize: PAGE_SIZE }
+}
+
+export async function countItems(table: ContentTable) {
+  await requireAdmin()
+  const supabase = await createClient()
+  const head = { count: 'exact', head: true } as const
+  const [published, drafts] = await Promise.all([
+    supabase.from(table).select('id', head).eq('status', 'published'),
+    supabase.from(table).select('id', head).eq('status', 'draft'),
+  ])
+  return { published: published.count ?? 0, drafts: drafts.count ?? 0 }
+}
+// + getItem(collection, id): select('*').eq('id', id).maybeSingle()
+```
+
+- **Typing:** the generic layer works on `Row = Record<string, unknown>` because the table name is only known at runtime, and Zod guards every write. Typed rows (`Tables<'blog'>`) are used on the website.
+- **Row limit:** the Data API returns at most 1,000 rows per request by default; lists are paginated anyway.
+- **Dates:** in Server Components they are formatted with `Intl.DateTimeFormat` in `APP_TIME_ZONE`, because Vercel's servers run in UTC.
+
+### 11.5 Server Actions
+
+All actions return the same shape:
+
+```ts
+export type ActionResult<T = void> =
+  | { ok: true; data: T }
+  | { ok: false; error: string; fieldErrors?: Record<string, string[]> }
+```
+
+| Action | Does |
+|---|---|
+| `saveItem({ collection, id, values, status, expectedUpdatedAt })` | Create or update, as draft or published ([see below](#saveitem)) |
+| `setItemStatus({ collection, id, status })` | Publish or unpublish from the list. Publishing re-checks the row against the *publish* schema. On failure: "Open the item to add: excerpt, content". |
+| `deleteItem({ collection, id })` | Delete the row, then (after the response) delete its main image from R2 and ping the website |
+| `createUploadUrl({ collection, contentType, size })` | Presigned PUT URL ([§8.3](#83-upload-flow)) |
+| `logout()` | Sign out and redirect to `/login` |
+
+#### `saveItem`
+
+```ts
+// src/actions/items.ts
+'use server'
+import { after } from 'next/server'
+import { refresh } from 'next/cache'
+import * as z from 'zod'
+// + requireAdmin (lib/auth), getCollection (config/collections), buildSchema (lib/schemas),
+//   valuesToRow (lib/mapping), createClient (lib/supabase/server), headObject + deleteObject (lib/r2),
+//   pingWebsite (lib/website), ActionResult
+
+export async function saveItem(input: {
+  collection: string
+  id: string | null                    // null = create
+  values: Record<string, unknown>
+  status: 'draft' | 'published'        // which button was pressed
+  expectedUpdatedAt: string | null     // for edit-conflict detection
+}): Promise<ActionResult<{ id: string; updatedAt: string }>> {
+  await requireAdmin()
+  const collection = getCollection(input.collection)
+  if (!collection) return { ok: false, error: 'Unknown content type.' }
+
+  const parsed = buildSchema(collection, input.status === 'published' ? 'publish' : 'draft').safeParse(input.values)
+  if (!parsed.success) {
+    return { ok: false, error: 'Please fix the highlighted fields.', fieldErrors: z.flattenError(parsed.error).fieldErrors }
+  }
+
+  const supabase = await createClient()
+  const previous = input.id
+    ? (await supabase.from(collection.table).select('*').eq('id', input.id).maybeSingle()).data
+    : null
+  if (input.id && !previous) return { ok: false, error: 'This item no longer exists.' }
+
+  // image object → image_* columns, rich text → sanitizeRichText(), '' → null, status
+  const row = valuesToRow(collection, parsed.data, input.status)
+
+  if (row.image_url && row.image_url !== previous?.image_url) {
+    const check = await headObject(row.image_url as string) // exists, allowed type, within size limit
+    if (!check.ok) return { ok: false, error: check.error, fieldErrors: { image: [check.error] } }
+  }
+
+  const write = input.id
+    ? supabase.from(collection.table).update(row).eq('id', input.id).eq('updated_at', input.expectedUpdatedAt!)
+    : supabase.from(collection.table).insert(row)
+  const { data, error } = await write.select('id, updated_at').maybeSingle()
+
+  if (error?.code === '23505') {
+    return { ok: false, error: 'This URL slug is already used.', fieldErrors: { slug: ['Already used by another item'] } }
+  }
+  if (error) return { ok: false, error: 'Could not save. Please try again.' }
+  if (!data) return { ok: false, error: 'This item was changed by someone else. Reload to see the latest version.' }
+
+  after(async () => {
+    if (previous?.image_url && previous.image_url !== row.image_url) await deleteObject(previous.image_url as string)
+    if (input.status === 'published' || previous?.status === 'published') {
+      await pingWebsite({ collection: collection.slug, slug: (row.slug ?? previous?.slug ?? null) as string | null })
+    }
+  })
+
+  refresh() // re-render the current page with fresh data in the same response
+  return { ok: true, data: { id: data.id, updatedAt: data.updated_at } }
+}
+```
+
+**On the client**
+- **After a create succeeds,** the form shows a toast and calls `router.replace('/<type>/<id>')`.
+- **After an update succeeds,** it calls `form.reset(values)`, which clears the "unsaved" state, and stores the new `updatedAt` for the next conflict check.
+- **Field errors from the server** are mapped onto the inputs with `setError`.
+
+**Why `after()`?** Deleting old images and pinging the website shouldn't slow down the save, and shouldn't fail it. Both run after the response has been sent.
+
+### 11.6 Error messages
+
+| Cause | Shown to the admin |
+|---|---|
+| Zod validation (browser or server) | The message next to each field, plus a toast: "Please fix the highlighted fields" |
+| `23505` unique violation | Next to the slug: "Already used by another item" |
+| Update matched no row (`updated_at` changed) | "This item was changed by someone else. Reload to see the latest version." |
+| `42501` (RLS / permission) | "You don't have permission to do this." This should never happen for admins. |
+| R2 file missing at save | Next to the image: "The upload didn't finish. Please upload the image again." |
+| Anything else | "Could not save. Please try again." The details go to the server log. |
+
+---
+
+## 12. Using the content on your website
+
+Your website, the separate project at `www.example.com`, reads Supabase directly. It **never** talks to the CMS. The examples assume a Next.js website, but the queries work the same in any framework.
+
+### 12.1 Setup
+
+```bash
+pnpm add @supabase/supabase-js
+pnpm add -D supabase
+pnpm supabase login   # once
+pnpm supabase gen types typescript --project-id <project-ref> --schema public > src/lib/database.types.ts
+```
+
+```bash
+# .env.local (website)
+NEXT_PUBLIC_SUPABASE_URL=https://<project-ref>.supabase.co
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+CMS_REVALIDATE_SECRET=<same value as WEBSITE_REVALIDATE_SECRET in the CMS>   # optional, §12.4
+```
+
+```ts
+// src/lib/cms.ts (website)
+import { cache } from 'react'
+import { createClient } from '@supabase/supabase-js'
+import type { Database, Tables } from './database.types'
+
+export const cms = createClient<Database>(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
+  { auth: { persistSession: false, autoRefreshToken: false } }, // read-only visitor, no login
+)
+
+export type BlogPost = Tables<'blog'>
+export type Testimonial = Tables<'testimonials'>
+export type VisaStamp = Tables<'visa_stamps'>
+```
+
+### 12.2 Queries
+
+```ts
+// Blog list (page 1 = newest 9)
+export async function getBlogPosts(page = 1, pageSize = 9) {
+  const from = (page - 1) * pageSize
+  const { data, count, error } = await cms
+    .from('blog')
+    .select('id, title, slug, excerpt, image_url, image_alt, image_width, image_height, tags, published_at', { count: 'exact' })
+    .eq('status', 'published')
+    .order('published_at', { ascending: false })
+    .range(from, from + pageSize - 1)
+  if (error) throw error
+  return { posts: data, total: count ?? 0 }
+}
+
+// One post by slug (cache() shares it between generateMetadata and the page)
+export const getBlogPost = cache(async (slug: string) => {
+  const { data, error } = await cms.from('blog').select('*').eq('status', 'published').eq('slug', slug).maybeSingle()
+  if (error) throw error
+  return data // null → notFound()
+})
+
+// News: the same as blog with .from('news')
+
+// Featured success stories for the home page
+const { data: stories } = await cms
+  .from('success_stories')
+  .select('title, slug, person_name, country, job_title, excerpt, image_url, image_alt, image_width, image_height')
+  .eq('status', 'published').eq('is_featured', true)
+  .order('published_at', { ascending: false }).limit(3)
+
+// Testimonials carousel
+const { data: testimonials } = await cms
+  .from('testimonials')
+  .select('name, job_title, country, quote, rating, image_url, image_alt, video_url')
+  .eq('status', 'published')
+  .order('is_featured', { ascending: false }).order('published_at', { ascending: false }).limit(12)
+
+// Visa stamp gallery, optionally for one country
+let stamps = cms
+  .from('visa_stamps')
+  .select('id, image_url, image_alt, image_width, image_height, country, visa_type, issued_on')
+  .eq('status', 'published')
+if (country) stamps = stamps.eq('country', country)
+const { data: visaStamps } = await stamps.order('published_at', { ascending: false }).range(0, 23)
+
+// Work permits: the same pattern with .from('work_permits')
+
+// Blog posts with a tag
+const { data: tagged } = await cms.from('blog').select('title, slug').eq('status', 'published').contains('tags', ['work-visa'])
+```
+
+### 12.3 Rendering rich text and images
+
+```tsx
+// app/blog/[slug]/page.tsx (website)
+import Image from 'next/image'
+import { notFound } from 'next/navigation'
+import type { Metadata } from 'next'
+import { getBlogPost } from '@/lib/cms'
+
+export async function generateMetadata({ params }: PageProps<'/blog/[slug]'>): Promise<Metadata> {
+  const post = await getBlogPost((await params).slug)
+  if (!post) return {}
+  return {
+    title: post.seo_title ?? post.title,
+    description: post.seo_description ?? post.excerpt ?? undefined,
+    openGraph: post.image_url ? { images: [post.image_url] } : undefined,
+  }
+}
+
+export default async function BlogPostPage({ params }: PageProps<'/blog/[slug]'>) {
+  const post = await getBlogPost((await params).slug)
+  if (!post) notFound()
+  return (
+    <article className="prose lg:prose-lg mx-auto">
+      <h1>{post.title}</h1>
+      {post.image_url && (
+        <Image src={post.image_url} alt={post.image_alt ?? ''} width={post.image_width ?? 1600}
+               height={post.image_height ?? 900} loading="eager" sizes="(max-width: 768px) 100vw, 768px" />
+      )}
+      {/* HTML was sanitized by the CMS before it was saved */}
+      <div dangerouslySetInnerHTML={{ __html: post.content }} />
+    </article>
+  )
+}
+```
+
+- **Allow the media domain** in the website's `next.config.ts`: `images: { remotePatterns: [new URL('https://media.example.com/**')] }`.
+- **Style rich text** with `@tailwindcss/typography` (`prose`).
+- **Testimonial quotes** are plain text; render them with `whitespace-pre-line` so line breaks show.
+- **Video links** (`video_url`) can be turned into a YouTube embed on the website.
+- **In Next.js 16, `priority` on `next/image` is deprecated.** Use `loading="eager"` or `fetchPriority="high"` for the main image.
+
+### 12.4 Keeping pages fresh
+
+Without extra setup, a Next.js page that reads Supabase at build time stays as it was built. Pick one of these:
+
+| Option | Setup | New content appears |
+|---|---|---|
+| **A. Time-based (simplest)** | `export const revalidate = 300` in list and detail pages, plus `export async function generateStaticParams() { return [] }` in `[slug]` pages | within 5 minutes |
+| **B. A + instant refresh (recommended)** | Option A, plus the route below; set `WEBSITE_REVALIDATE_URL` and the secret in the CMS | within seconds; A stays as the safety net |
+| **C. Cache Components** (if the website uses `cacheComponents: true`) | Wrap reads in `'use cache'` + `cacheTag('cms')` + `cacheLife('max')`; the route calls `revalidateTag('cms', 'max')` | within seconds |
+
+```ts
+// app/api/revalidate/route.ts (website), called by the CMS after each save
+import { revalidatePath } from 'next/cache'
+
+export async function POST(request: Request) {
+  if (request.headers.get('authorization') !== `Bearer ${process.env.CMS_REVALIDATE_SECRET}`) {
+    return Response.json({ revalidated: false }, { status: 401 })
+  }
+  revalidatePath('/', 'layout') // content changes are rare: refresh every page
+  return Response.json({ revalidated: true })
+}
+```
+
+The CMS side (`src/lib/website.ts`) sends a `POST` with `{ collection, slug }`, a 5-second timeout, and logs failures. Option A catches anything missed.
+
+**Scheduled items** (a future `published_at`) appear when the time-based refresh runs after that moment. Saving does not trigger it.
+
+### 12.5 Rules for the website
+
+- **Use only the publishable key.** The secret key bypasses RLS, so drafts would leak.
+- **Always add `.eq('status', 'published')`.** RLS already enforces it, but the query stays correct and readable, and it matches the index.
+- **Select only the columns you show.**
+- **Regenerate the types** (`supabase gen types …`) whenever the CMS schema changes.
+- **If anything other than the CMS can write to these tables,** sanitize the HTML again on the website.
+
+---
+
+## 13. Project structure
 
 ```text
 .
 ├── plan.md
 ├── AGENTS.md / CLAUDE.md
 ├── next.config.ts
-├── drizzle.config.ts
 ├── biome.json
 ├── vitest.config.ts
 ├── playwright.config.ts
 ├── .env.example
+├── .nvmrc                              # 24
 ├── scripts/
-│   ├── set-password.ts            # owner-only: reset an admin's password (secret key)
-│   └── reconcile-media.ts         # delete orphaned R2 objects
+│   └── set-password.ts                 # local only: reset an admin's password (secret key)
 ├── supabase/
-│   ├── config.toml                # local stack (supabase init)
-│   ├── migrations/                # drizzle-kit output (prefix 'supabase') + custom SQL
-│   └── seed.sql                   # optional demo types/entries for local dev
+│   ├── config.toml                     # from `supabase init`
+│   ├── migrations/
+│   │   ├── <ts>_content_tables.sql
+│   │   └── <ts>_access_control.sql
+│   └── tests/rls.test.sql              # optional pgTAP tests (§16)
 ├── src/
-│   ├── proxy.ts                   # session refresh + optimistic /admin guard
+│   ├── proxy.ts                        # session refresh + send guests to /login
 │   ├── app/
-│   │   ├── layout.tsx             # <html>, fonts, theme script, NuqsAdapter, toaster
-│   │   ├── page.tsx               # redirect('/admin')
-│   │   ├── login/{page.tsx, login-form.tsx}
-│   │   ├── admin/
-│   │   │   ├── layout.tsx         # app shell (sidebar loads content types)
-│   │   │   ├── loading.tsx, error.tsx, not-found.tsx
-│   │   │   ├── page.tsx           # dashboard
-│   │   │   ├── content/[type]/page.tsx
-│   │   │   ├── content/[type]/new/page.tsx
-│   │   │   ├── content/[type]/[entryId]/page.tsx
-│   │   │   ├── content-types/page.tsx
-│   │   │   ├── content-types/[id]/page.tsx
-│   │   │   ├── media/page.tsx
-│   │   │   └── settings/{api-tokens,webhooks,users,profile}/…
-│   │   └── api/
-│   │       ├── [apiId]/route.ts         # GET list / single type, OPTIONS
-│   │       ├── [apiId]/[id]/route.ts    # GET one, OPTIONS
-│   │       └── health/route.ts
-│   ├── actions/                   # 'use server': auth, content-types, entries, media, api-tokens, webhooks, users
-│   ├── server/                    # import 'server-only'
-│   │   ├── env.ts                 # Zod-validated server env
-│   │   ├── db/{index.ts, schema.ts}
-│   │   ├── auth/{supabase.ts, proxy-session.ts, dal.ts}
-│   │   ├── services/{content-types.ts, entries.ts, media.ts, api-tokens.ts, webhooks.ts, events.ts}
-│   │   ├── query/{parse.ts, compile.ts}       # shared by the admin list + public API
-│   │   ├── api/{auth.ts, serialize.ts, populate.ts, errors.ts, cors.ts}
-│   │   └── storage/{r2.ts, keys.ts, purge.ts}
-│   ├── lib/                       # isomorphic
-│   │   ├── schema/{types.ts, field-schemas.ts, entry-schema.ts, naming.ts, reserved.ts, diff.ts}
-│   │   ├── media/{policy.ts, urls.ts, image-loader.ts}
-│   │   ├── richtext/{extensions.ts, render.ts}
-│   │   └── utils.ts
-│   └── components/
-│       ├── ui/                    # shadcn-generated
-│       ├── shell/                 # sidebar, header, user menu, command palette, theme toggle
-│       ├── data-table/            # TanStack Table v9 wrappers
-│       ├── fields/                # registry + one module per field type
-│       ├── content-type-builder/
-│       ├── content-manager/
-│       └── media/                 # grid, uploader queue, picker dialog, detail sheet
+│   │   ├── layout.tsx                  # <html>, fonts, <Toaster/>, robots: noindex
+│   │   ├── globals.css
+│   │   ├── robots.txt                  # Disallow: /
+│   │   ├── login/
+│   │   │   ├── page.tsx                # form / "no access" / redirect if already admin
+│   │   │   └── login-form.tsx
+│   │   └── (cms)/
+│   │       ├── layout.tsx              # app shell: sidebar, header, user menu
+│   │       ├── page.tsx                # home dashboard
+│   │       ├── loading.tsx · error.tsx · not-found.tsx
+│   │       └── [collection]/
+│   │           ├── page.tsx            # list
+│   │           ├── new/page.tsx        # create
+│   │           └── [id]/page.tsx       # edit
+│   ├── actions/
+│   │   ├── auth.ts                     # logout
+│   │   ├── items.ts                    # saveItem, setItemStatus, deleteItem
+│   │   └── uploads.ts                  # createUploadUrl
+│   ├── config/
+│   │   ├── collections.ts              # the six content types
+│   │   ├── countries.ts                # country suggestions
+│   │   └── site.ts                     # app name, website URL
+│   ├── components/
+│   │   ├── ui/                         # shadcn-generated
+│   │   ├── shell/                      # sidebar, header, user menu
+│   │   ├── items/                      # table, grid, status badge, delete dialog, item form + loader
+│   │   ├── fields/                     # one component per field type + registry
+│   │   └── editor/                     # Tiptap editor, toolbar, link and image dialogs
+│   └── lib/
+│       ├── supabase/{server.ts, client.ts, proxy.ts, database.types.ts}
+│       ├── auth.ts                     # getCurrentUser, requireAdmin (server-only)
+│       ├── items.ts                    # listItems, getItem, countItems (server-only)
+│       ├── schemas.ts                  # buildSchema (shared)
+│       ├── mapping.ts                  # valuesToRow / rowToValues (shared)
+│       ├── sanitize.ts                 # sanitizeRichText (server-only)
+│       ├── r2.ts                       # S3 client, presign, head, delete (server-only)
+│       ├── website.ts                  # pingWebsite (server-only)
+│       ├── images/{prepare.ts, upload.ts}  # browser-only
+│       ├── slug.ts                     # wraps @sindresorhus/slugify
+│       ├── dates.ts                    # Intl helpers
+│       └── env.ts                      # Zod-validated environment variables
 └── tests/
-    ├── unit/                      # or colocated *.test.ts
-    ├── integration/
-    └── e2e/
+    ├── unit/                           # schemas, mapping, sanitize, slug, keys
+    └── e2e/                            # Playwright smoke tests
 ```
+
+The files `src/app/page.tsx` and `public/*.svg` from create-next-app are removed, because `(cms)/page.tsx` now serves `/`.
 
 ---
 
-## 15. Configuration & environment variables
+## 14. Environment variables & config
 
-### 15.1 Environment variables
-
-All variables are validated with Zod at startup in `src/server/env.ts`. `NEXT_PUBLIC_*` values are inlined into the browser bundle at build time.
+### 14.1 CMS (`.env.local` and Vercel project settings)
 
 | Variable | Scope | Example / notes |
 |---|---|---|
-| `NEXT_PUBLIC_APP_URL` | public | `https://cms.example.com` |
-| `NEXT_PUBLIC_SUPABASE_URL` | public | `https://<ref>.supabase.co` |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | public | `sb_publishable_…` |
-| `SUPABASE_SECRET_KEY` | server/scripts | `sb_secret_…`. Only for `scripts/set-password.ts` and the Users page's "last sign-in". |
-| `DATABASE_URL` | server | Transaction pooler: `postgresql://postgres.<ref>:<pw>@aws-0-<region>.pooler.supabase.com:6543/postgres` |
-| `DATABASE_CA_CERT` | server | Supabase root CA (PEM), for `pg` TLS verification |
-| `MIGRATIONS_DATABASE_URL` | CI/local | Session pooler, port 5432 (drizzle-kit and the Supabase CLI) |
+| `NEXT_PUBLIC_SUPABASE_URL` | public | `https://<project-ref>.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | public | `sb_publishable_…`. Safe in the browser; RLS protects the data. |
+| `NEXT_PUBLIC_MEDIA_URL` | public | `https://media.example.com` (no trailing slash) |
+| `NEXT_PUBLIC_WEBSITE_URL` | public | `https://www.example.com`, for "View on website" |
 | `R2_ACCOUNT_ID` | server | Cloudflare account ID |
-| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | server | Bucket-scoped R2 token |
+| `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | server | The bucket-scoped R2 token |
 | `R2_BUCKET` | server | `cms-media` |
-| `R2_JURISDICTION` | server | `eu`, or unset |
-| `NEXT_PUBLIC_MEDIA_BASE_URL` | public | `https://media.example.com` |
-| `NEXT_PUBLIC_MEDIA_TRANSFORMATIONS` | public | `true` when Cloudflare Image Transformations are enabled |
-| `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_API_TOKEN` | server | Optional: CDN purge on delete |
-| `API_TOKEN_PEPPER` | server | ≥ 32 random bytes. Rotating it invalidates every API token. |
-| `API_CORS_ORIGINS` | server | `https://example.com,https://www.example.com` or `*` |
-| `API_PUBLIC_CACHE_SECONDS` | server | `0` (default) |
-| `CRON_SECRET` | server | Protects the maintenance routes |
-| `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` | server | Only when self-hosting multiple instances |
+| `R2_JURISDICTION` | server | `eu` for an EU-jurisdiction bucket, otherwise empty |
+| `APP_TIME_ZONE` | server | e.g. `Europe/Warsaw`; used to show dates in lists |
+| `WEBSITE_REVALIDATE_URL` | server, optional | `https://www.example.com/api/revalidate` |
+| `WEBSITE_REVALIDATE_SECRET` | server, optional | A long random string, the same as `CMS_REVALIDATE_SECRET` on the website |
+| `SUPABASE_SECRET_KEY` | **local only** | `sb_secret_…`, only for `scripts/set-password.ts`. **Never set it on Vercel.** |
 
-### 15.2 Database client and migration config
+`src/lib/env.ts` validates these with Zod at startup, so a missing variable fails fast with a clear message.
 
-**Database client** (`src/server/db/index.ts`). Use `pg`, not postgres.js, on the transaction pooler.
-
-```ts
-import 'server-only'
-import { Pool } from 'pg'
-import { drizzle } from 'drizzle-orm/node-postgres'
-import { attachDatabasePool } from '@vercel/functions'
-import * as schema from './schema'
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL, // Supavisor transaction mode (6543); no ?sslmode param
-  ssl: process.env.DATABASE_CA_CERT ? { ca: process.env.DATABASE_CA_CERT } : undefined, // undefined locally
-  max: 5,                    // small pool; Supavisor multiplexes server connections
-  idleTimeoutMillis: 5_000,
-})
-attachDatabasePool(pool)     // Vercel Fluid compute: release idle clients before suspension
-
-export const db = drizzle({ client: pool, schema })
-// Don't use named prepared statements (.prepare('name')) on the transaction pooler.
-```
-
-**Drizzle Kit** (`drizzle.config.ts`). It writes SQL that the Supabase CLI applies.
-
-```ts
-import { defineConfig } from 'drizzle-kit'
-
-export default defineConfig({
-  dialect: 'postgresql',
-  schema: './src/server/db/schema.ts',
-  out: './supabase/migrations',
-  migrations: { prefix: 'supabase' },            // YYYYMMDDHHMMSS_name.sql
-  entities: { roles: { provider: 'supabase' } }, // ignore Supabase-managed roles
-  schemaFilter: ['public'],
-  dbCredentials: { url: process.env.MIGRATIONS_DATABASE_URL! },
-})
-```
-
-**Migration workflow**
-1. Edit `schema.ts`.
-2. Run `pnpm db:generate`.
-3. Review the SQL.
-4. Run `pnpm db:reset` (local stack) or `pnpm db:push` (linked project).
-
-Write hand-written SQL with `pnpm db:custom --name=<name>`. **Use only the Supabase CLI to apply migrations**, never `drizzle-kit migrate` as well.
-
-### 15.3 `next.config.ts` (sketch)
+### 14.2 `next.config.ts`
 
 ```ts
 import type { NextConfig } from 'next'
 
-const media = process.env.NEXT_PUBLIC_MEDIA_BASE_URL ?? 'https://media.example.com'
-const transformations = process.env.NEXT_PUBLIC_MEDIA_TRANSFORMATIONS === 'true'
+const mediaUrl = process.env.NEXT_PUBLIC_MEDIA_URL ?? 'https://media.example.com'
 
 const nextConfig: NextConfig = {
-  typedRoutes: true,
   poweredByHeader: false,
-  images: transformations
-    ? { loader: 'custom', loaderFile: './src/lib/media/image-loader.ts' }
-    : { remotePatterns: [new URL(`${media}/media/**`)] },
-  experimental: {
-    serverActions: { bodySizeLimit: '2mb' }, // large rich-text documents
-  },
+  images: { remotePatterns: [new URL(`${mediaUrl}/**`)] }, // thumbnails and previews
   async headers() {
     return [{
       source: '/:path*',
@@ -1554,6 +1956,7 @@ const nextConfig: NextConfig = {
         { key: 'X-Frame-Options', value: 'DENY' },
         { key: 'X-Content-Type-Options', value: 'nosniff' },
         { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        { key: 'X-Robots-Tag', value: 'noindex, nofollow' },
       ],
     }]
   },
@@ -1562,7 +1965,9 @@ const nextConfig: NextConfig = {
 export default nextConfig
 ```
 
-### 15.4 `package.json` scripts
+Server Action bodies are limited to 1 MB by default, which is plenty: images never pass through our server. If very long articles ever hit the limit, raise `experimental.serverActions.bodySizeLimit`.
+
+### 14.3 `package.json` scripts
 
 ```json
 {
@@ -1574,372 +1979,346 @@ export default nextConfig
   "format": "biome format --write .",
   "test": "vitest run",
   "test:e2e": "playwright test",
-  "db:generate": "drizzle-kit generate",
-  "db:custom": "drizzle-kit generate --custom",
-  "db:reset": "supabase db reset",
-  "db:push": "supabase db push"
+  "db:new": "supabase migration new",
+  "db:push": "supabase db push",
+  "db:types": "supabase gen types typescript --linked --schema public > src/lib/supabase/database.types.ts"
 }
 ```
 
 ---
 
-## 16. Implementation roadmap
+## 15. Roadmap
 
-v1 is Phases 0–7. Phase 8 (components and dynamic zones) is an additive change that can ship right after launch. Each phase ends in a deployable state.
+Each phase ends in a working, deployable state.
 
-### Phase 0 — Foundations & infrastructure
+### Phase 0: Accounts & project setup
 
-- [ ] **Create accounts and projects:** the Supabase project (EU region), Cloudflare R2 (enabled, bucket decision), and a Vercel project.
-- [ ] **Configure Supabase:** sign-ups off, asymmetric JWT keys, first user created, Data API off ([§9.1](#91-supabase-project-configuration-one-time)).
-- [ ] **Set up R2:** bucket, custom domain, CORS, cache rule, `nosniff` rule, scoped token, lifecycle rule; optionally transformations and a purge token ([§10.1](#101-cloudflare-setup-one-time)).
-- [ ] **Tooling:**
-  - Node 24 via `.nvmrc` and `engines`;
-  - Biome with `css.parser.tailwindDirectives: true`;
-  - Vitest and Playwright;
-  - the scripts from [§15.4](#154-packagejson-scripts).
-- [ ] **Install dependencies:**
+- [ ] **Supabase:** create the project and configure it as in [§7.1](#71-supabase-setup-one-time), steps 1–5.
+- [ ] **Cloudflare R2:** set up as in [§8.1](#81-cloudflare-setup-one-time) (decide the EU jurisdiction first).
+- [ ] **Vercel:**
+  - create a project linked to this repo;
+  - add the domain `cms.example.com`;
+  - set the function region near Supabase (e.g. `fra1` for Frankfurt);
+  - set Node.js to 24.x.
+- [ ] **Install the dependencies:**
 
   ```bash
-  pnpm add @supabase/ssr @supabase/supabase-js drizzle-orm@^0.45 pg @vercel/functions \
-    @aws-sdk/client-s3 @aws-sdk/s3-request-presigner zod server-only qs nanoid pluralize \
-    react-hook-form @hookform/resolvers @tanstack/react-table nuqs \
-    @tiptap/react @tiptap/pm @tiptap/starter-kit @tiptap/extension-image @tiptap/static-renderer \
-    @uiw/react-codemirror @codemirror/lang-json react-dropzone date-fns @date-fns/tz @sindresorhus/slugify
-  pnpm add -E @dnd-kit/react@0.5.0 @dnd-kit/helpers@0.5.0
-  pnpm add react-day-picker@^9.14.0
-  pnpm add -D drizzle-kit@^0.31 supabase @types/pg @types/qs @types/pluralize \
-    vitest vite @vitejs/plugin-react jsdom @testing-library/react @testing-library/dom @testing-library/user-event \
-    @playwright/test
+  pnpm add @supabase/supabase-js @supabase/ssr zod react-hook-form @hookform/resolvers \
+    @aws-sdk/client-s3 @aws-sdk/s3-request-presigner sanitize-html @sindresorhus/slugify server-only \
+    @tiptap/react @tiptap/pm @tiptap/starter-kit @tiptap/extension-image @tiptap/extensions \
+    @tiptap/extension-file-handler @tiptap/extension-text-style   # text-style: peer of file-handler
+  pnpm add -D supabase @types/sanitize-html @tailwindcss/typography vitest @playwright/test
   pnpm add -D -E @biomejs/biome
-  pnpm dlx shadcn@latest init   # Base UI primitives (default)
+  pnpm approve-builds      # allow the `supabase` package to download its CLI binary
+  pnpm dlx shadcn@latest init   # accept the defaults (Base UI)
+  pnpm dlx shadcn@latest add button input textarea label field card badge table dropdown-menu \
+    alert-dialog dialog sidebar separator skeleton sonner switch tabs tooltip breadcrumb progress collapsible
   ```
 
-- [ ] **UI foundations:** theme (light/dark/system inline script), fonts, base layout.
-- [ ] **Environment:** `src/server/env.ts` plus `.env.example`.
-- [ ] **Data layer:**
-  - Drizzle schema v1 and the security migration ([§7.1](#71-tables)), applied with `supabase db push`;
-  - `src/server/db` (pg pool) and `src/server/storage/r2.ts`.
-- [ ] **Deploy a skeleton** to Vercel, with the function region matching Supabase.
+- [ ] **Tooling:**
+  - Biome config, with Tailwind directives enabled in its CSS parser;
+  - `vitest.config.ts` with the `@/` alias, and `playwright.config.ts`;
+  - the scripts from [§14.3](#143-packagejson-scripts);
+  - `.nvmrc` containing `24`.
+- [ ] **Environment:** `.env.example`, `.env.local`, and `src/lib/env.ts`.
 
 **Done when:**
-- `pnpm build`, `pnpm lint` and `pnpm typecheck` pass, and the app is deployed.
-- The Security Advisor shows no errors.
-- Signing up through the Auth API fails, while the dashboard-created user exists with an `owner` profile.
+- `pnpm dev`, `pnpm build`, `pnpm lint` and `pnpm typecheck` pass.
+- A preview deployment on Vercel works.
 
-### Phase 1 — Auth & admin shell
+### Phase 1: Database
 
-- [ ] Supabase server client, `proxy.ts` session refresh, DAL (`getCurrentUser`, `requireUser`).
-- [ ] `/login` page (`useActionState`, pending state, generic errors, safe `next`) and logout.
-- [ ] Handling for deactivated accounts, without a redirect loop.
-- [ ] Admin shell:
-  - sidebar listing content types (empty state that links to the builder);
-  - header with breadcrumbs, user menu and theme toggle;
-  - `loading`, `error` and `not-found` pages.
-- [ ] Dashboard placeholder; `scripts/set-password.ts`.
-- [ ] A test asserting that every export in `src/actions/*` calls `requireUser()`.
+- [ ] **Link the CLI:** run `pnpm supabase login`, `pnpm supabase init`, then `pnpm supabase link --project-ref <ref>`. `link` asks for the database password.
+- [ ] **Migration 1** ([§6.3](#63-migration-1-content-tables)): enum, `private` schema, trigger function, the six tables, indexes and triggers.
+- [ ] **Migration 2** ([§6.4](#64-migration-2-access-rules-rls)): `admins`, `private.is_admin()`, grants and RLS policies.
+- [ ] **Apply and generate types:** `pnpm db:push`, then `pnpm db:types`.
+- [ ] **Create your admin user** ([§6.5](#65-managing-admins)).
+- [ ] **Check the rules** with the SQL from [§6.6](#66-checking-the-rules); the Security Advisor must be clean.
 
 **Done when:**
-- Opening `/admin/...` while logged out redirects to `/login?next=…`, and logging in returns you to that page.
-- Calling an admin action without a session fails.
-- A deactivated profile is locked out even with a valid session.
+- `curl "$SUPABASE_URL/rest/v1/blog?select=title" -H "apikey: $PUBLISHABLE_KEY"` returns only published rows, which is `[]` for now.
+- An anonymous insert is refused.
+- The admin check in the SQL editor sees drafts.
 
-### Phase 2 — Content-Type Builder
+### Phase 2: Login & app shell
 
-- [ ] `src/lib/schema`:
-  - field-definition Zod schemas;
-  - naming (display name → kebab-case singular/plural);
-  - reserved names;
-  - semantic checks: unique names, relation targets exist, UID target is a text field, enum values are unique.
-- [ ] Field registry v1, covering settings forms and icons for all 13 types.
-- [ ] Builder index and the create dialog.
-- [ ] Type editor:
-  - drag-to-reorder field list;
-  - add/edit field dialog with Basic and Advanced tabs;
-  - type settings.
-- [ ] Save pipeline: validate → diff by field `id` → impact confirmation → transaction (schema + JSONB migrations) → `revalidatePath('/admin', 'layout')`.
-- [ ] Delete type (type its name to confirm; blocked when other types relate to it).
-
-**Done when:**
-- `Article`, `Author`, `Tag` and `Homepage` (single type) can be created using every field type.
-- Renaming a field keeps its values (integration test), and deleting a field removes its keys.
-- Reserved or duplicate names are rejected with clear messages.
-
-### Phase 3 — Content Manager
-
-- [ ] `buildEntrySchema(ct, mode)` with unit tests per field type and mode.
-- [ ] Entry service:
-  - create, save, publish, unpublish, discard, duplicate, delete and bulk operations;
-  - uniqueness under an advisory lock;
-  - optimistic locking;
-  - domain events.
-- [ ] Query engine v1 (shared with the API): `_q`, status, field filters, typed sort, pagination.
-- [ ] List view: TanStack Table v9 (server-side), nuqs URL state, column picker, bulk actions, row actions.
-- [ ] Editor:
-  - inputs for every field type (the media input is a stub until Phase 4);
-  - relation combobox, UID generation and availability check;
-  - Tiptap, CodeMirror and date pickers.
-- [ ] Editor sidebar actions and metadata; the single-type editor.
-- [ ] Unsaved-changes guard, ⌘S, toasts, and server field errors mapped onto inputs.
+- [ ] **Session plumbing:**
+  - the Supabase server, browser and proxy clients;
+  - `src/proxy.ts`;
+  - `src/lib/auth.ts` (`getCurrentUser`, `requireAdmin`).
+- [ ] **Login and logout:**
+  - the `/login` page with its three states (form / no access / redirect);
+  - the login form with a safe `next`;
+  - the logout action.
+- [ ] **App shell:**
+  - remove the starter `src/app/page.tsx`;
+  - add the `(cms)` layout with sidebar, header and user menu;
+  - add `loading`, `error` and `not-found` pages.
+- [ ] **No indexing:** robots metadata, `robots.txt`, and the `X-Robots-Tag` header.
 
 **Done when:**
-- The draft → published → modified → discard → unpublish lifecycle works, and status badges and filters are correct.
-- Saving a draft allows missing required fields, and publishing lists every failing field.
-- When two people save the same entry, the second one gets a conflict message.
-- With 1,000 seeded entries, the list paginates, sorts and searches in < 300 ms of server time.
+- A logged-out visit to `/blog` goes to `/login?next=%2Fblog`, and logging in returns you there.
+- A wrong password shows a generic error.
+- A user who isn't in `admins` gets "no access" and is signed out.
+- Logout works, and the session survives a page reload.
 
-### Phase 4 — Media Library (R2)
+### Phase 3: Content config, home & lists
 
-- [ ] Shared MIME and size policy ([§10.3](#103-allowed-types-and-limits)).
-- [ ] Actions: `createUploadUrls` (batched), `finalizeUploads` (HeadObject check), `updateMedia`, `deleteMedia` (usage check, R2 delete, optional purge).
-- [ ] Uploader: react-dropzone, XHR progress, 4 uploads at a time, retry and cancel, `createImageBitmap` for dimensions.
-- [ ] Library page: grid/list, search, filter, sort, pagination, multi-select, detail sheet.
-- [ ] Picker dialog wired into `media` fields and Tiptap's image button.
-- [ ] URL helpers, the custom image loader, and `formats` for the API.
-- [ ] *(Stretch)* Replace file; thumbhash placeholders via `sharp` in `after()`; the orphan-reconcile script.
-
-**Done when:**
-- 10 images uploaded at once show live progress and land under `media/YYYY/MM/` in R2 and in the grid.
-- Files of the wrong type or over the size limit are rejected both before the PUT (policy) and after it (HeadObject).
-- Deleting a file removes the R2 object (and purges the CDN when configured), and files in use show "Used by" first.
-
-### Phase 5 — Public REST API & API tokens
-
-- [ ] Token service (generate, HMAC, verify, regenerate, expire) and the settings UI (create → reveal once → copy).
-- [ ] Per-type "public read" switch.
-- [ ] Route handlers `/api/[apiId]` and `/api/[apiId]/[id]` (with UID lookup), plus `OPTIONS` and `/api/health`.
-- [ ] Request pipeline:
-  - parse with `qs` (strict) → Zod → compiler;
-  - serializer: removes private fields, populates media and relations, renders rich text to HTML, adds `formats`.
-- [ ] Error format, CORS, cache headers and the statement timeout.
-- [ ] An "API" tab per content type with example requests and a sample response.
+- [ ] **Config:** `src/config/collections.ts` for all six types, plus `countries.ts`.
+- [ ] **Data functions:** `src/lib/items.ts` (`listItems`, `getItem`, `countItems`).
+- [ ] **Home dashboard:** cards with counts.
+- [ ] **List page:**
+  - search, status tabs and pagination;
+  - thumbnails and status badges (Draft / Published / Scheduled);
+  - empty states;
+  - a grid view for visa stamps and work permits.
+- [ ] **Actions:** `setItemStatus` and `deleteItem` with a confirmation dialog. The R2 deletion is wired up in Phase 5.
 
 **Done when:**
-- `curl -H "Authorization: Bearer $TOKEN" "$CMS/api/articles?filters[slug][\$eq]=hello&populate=*"` returns the published entry with media and author populated.
-- Without a token, the API returns 401 unless the type is public. Drafts never leak: `status=draft` with a read-only token returns 403.
-- Private fields never appear (contract tests), and invalid parameters return a clear 400.
+- Rows inserted with SQL show up with the right counts, filters and pages.
+- Publish and unpublish from the list work.
+- `/foo` shows a 404.
 
-### Phase 6 — Webhooks
+### Phase 4: Editor
 
-- [ ] Webhooks admin UI: list and editor (events, headers, secret reveal/rotate, enabled switch).
-- [ ] An event bus in the services, delivered through an `after()` dispatcher with signing, timeout, retries and logging.
-- [ ] Deliveries table per webhook, plus "Send test".
-- [ ] Docs: a receiver signature check and a `revalidateTag` recipe for a Next.js site.
+- [ ] **Shared logic:** `buildSchema`, `valuesToRow` and `rowToValues`, with unit tests for every collection in draft and publish mode.
+- [ ] **Field components:** text, textarea (with counter), slug (auto plus Generate), url, date, country, rating, tags, boolean, and the publish date. Image and rich text are placeholders until Phases 5–6.
+- [ ] **Editor layout:**
+  - main, side and SEO areas;
+  - buttons that depend on the state;
+  - status badge;
+  - the client-only form loader.
+- [ ] **`saveItem` action:**
+  - validation;
+  - slug-taken and edit-conflict errors;
+  - toasts;
+  - navigation after create.
+- [ ] **Unsaved changes:** the leave-page warning and Ctrl/⌘ + S.
 
 **Done when:**
-- Publishing an entry delivers a correctly signed `entry.publish` to a test receiver within seconds.
-- Failed deliveries are retried, and every attempt appears in the log.
+- Testimonials can be fully created, edited, published, unpublished and deleted (they need no rich text).
+- Publishing an empty item lists every missing field.
+- Saving the same item in two tabs gives the second tab a conflict message.
+- A duplicate slug shows its error next to the slug field.
 
-### Phase 7 — Polish, hardening & go-live (v1 release)
+### Phase 5: Images (R2)
 
-- [ ] Dashboard widgets and the ⌘K command palette.
-- [ ] Preview button: a per-type `previewUrl` template with `{field}` placeholders that opens the site's draft mode, which reads with `status=draft` using a full-access token.
-- [ ] Empty states, skeletons, `catchError` error boundaries, and an accessibility and responsive pass.
-- [ ] Security headers and CSP; optional API rate limiting (Vercel Firewall or Upstash); cron-protected maintenance routes.
-- [ ] Backups: Supabase Pro and/or a scheduled `pg_dump` to a private bucket; perform one restore drill.
-- [ ] E2E suite green in CI; README runbooks (setup, create user, reset password, rotate secrets, restore).
-- [ ] Production cutover: production Supabase, R2 and domains, environment variables, and real users.
+- [ ] **Server:** `src/lib/r2.ts` (client, presign, head, delete) and the `createUploadUrl` action.
+- [ ] **Browser:** `prepareImage`, `putWithProgress` and `uploadImage`.
+- [ ] **Image field:**
+  - drop zone or file picker, preview and progress;
+  - alt text, Replace and Remove;
+  - error messages;
+  - the privacy reminder for visa stamps and work permits.
+- [ ] **On save:** the `HeadObject` check, and deleting replaced or removed images after the save. Deleting an item deletes its image.
+- [ ] **Thumbnails:** `next/image` `remotePatterns` for list thumbnails and previews.
 
-**Done when:** every acceptance check from Phases 0–6 passes in production, and a backup has been restored once.
+**Done when:**
+- A 10–12 MB phone photo is stored with its longest side at 2000 px or less, typically under 600 KB, and with no EXIF data. It is WebP from Chrome and JPEG from Safari.
+- An SVG or a 30 MB file is rejected with a clear message.
+- Replacing an image removes the old file from R2.
+- A visa stamp can be published end to end, including from a phone.
 
-### Phase 8 — Components & dynamic zones (right after launch)
+### Phase 6: Rich text
 
-- [ ] A `components` table and a builder section for categories, icons and fields, with nesting up to 2 levels.
-- [ ] `component` fields (single or repeatable, with min/max) and `dynamiczone` fields (allowed components, min/max).
-- [ ] A recursive form renderer with sortable, collapsible and duplicable items.
-- [ ] Validation with `z.discriminatedUnion('__component', …)`.
-- [ ] Media and relation population inside components.
-- [ ] App-side batch migrations when a component's schema changes.
+- [ ] **Tiptap editor:**
+  - toolbar;
+  - link dialog;
+  - image dialog (upload and alt text);
+  - paste and drop of images;
+  - no base64 images.
+- [ ] **`sanitizeRichText`** in `saveItem`, with unit tests covering XSS cases.
+- [ ] **Full forms** for blog, news and success stories.
 
-**Done when:** a "Landing page" single type with a dynamic zone (Hero, Features, FAQ (repeatable), CTA) can be edited and fetched through the API.
+**Done when:**
+- An article with headings, lists, links and two inline images saves and reloads identically.
+- `<script>`, `onerror=`, `javascript:` links and images from other domains are stripped.
+
+### Phase 7: Website hookup & go-live
+
+- [ ] **Website:** environment variables, generated types, the `cms` client, and queries for all six types ([§12](#12-using-the-content-on-your-website)).
+- [ ] **Instant refresh:** the revalidation route on the website, `pingWebsite` in the CMS, and the shared secret on both sides.
+- [ ] **Tests and docs:**
+  - Playwright smoke tests in CI;
+  - a README covering setup, adding an admin, resetting a password and restoring a backup.
+- [ ] **Production:**
+  - the Supabase plan decided ([§17](#17-deployment--operations));
+  - production environment variables on Vercel and domains connected;
+  - real admins created.
+
+**Done when:**
+- A blog post published in the CMS appears on the website within seconds.
+- Drafts never appear on the website.
+- A restore from backup has been tried once.
+
+### Phase 8: After launch (optional)
+
+- [ ] **"Clean up unused images":**
+  - lists R2 objects older than 24 h that no row references (the `image_url` columns plus `<img>` tags in rich text);
+  - asks for confirmation, then deletes them.
+- [ ] "Recently edited" on the home page.
+- [ ] A "Change my password" page.
+- [ ] Anything from the backlog ([§19](#19-later-backlog)).
 
 ---
 
-## 17. Testing strategy
+## 16. Testing
 
 | Layer | Tool | Covers |
 |---|---|---|
-| Unit | Vitest | Field-definition schemas; `buildEntrySchema` in draft vs publish mode; naming and reserved rules; schema diff → migration SQL; query parser and compiler (SQL snapshots); serializer; token hashing; webhook signing; MIME/size policy |
-| Integration | Vitest + local Supabase (`supabase start`) | Services against real Postgres: publish/unpublish/discard, uniqueness under concurrent saves, field-rename migration, optimistic locking, API handlers end to end |
-| Component | Testing Library | Field inputs, the builder's field dialog, the upload queue (mocked XHR) |
-| E2E | Playwright | Login/logout; create type → entry → publish → fetch via API; media upload (dev bucket); webhook to a local receiver |
-| Manual | Release checklist | Security Advisor, CORS from the real site's origin, image transformations, Lighthouse accessibility |
-
-**CI** (GitHub Actions) runs `biome check` → `typecheck` → unit → integration (Supabase CLI in Docker) → `build` → E2E against a preview deployment.
+| Unit | Vitest | `buildSchema` (draft vs publish, per collection), `valuesToRow` / `rowToValues`, `sanitizeRichText` (scripts, event handlers, `javascript:` links, foreign images, styles), slug generation, R2 key and URL checks |
+| Database | SQL checks ([§6.6](#66-checking-the-rules)); optional pgTAP in `supabase/tests/` run by `supabase test db` against the local Docker stack | anon sees only published, already-live rows; anon and non-admins can't write; admins can do everything; the trigger stamps `published_at` |
+| End-to-end | Playwright against a preview deployment, with a dev Supabase project and a dev bucket | login (wrong password, non-admin, admin); create draft → publish → visible to an anonymous query; image upload; delete |
+| Manual | Release checklist | upload from an iPhone, an Android phone, desktop Safari (JPEG fallback) and desktop Chrome (WebP), and try a HEIC file in Chrome to see the friendly error; the website renders the content; the Security Advisor is clean; CORS works from the real CMS domain |
 
 ---
 
-## 18. Deployment & operations
+## 17. Deployment & operations
 
-- **Topology:**
-  - `cms.example.com` serves the Next.js app on Vercel, in the same region as Supabase (e.g. `fra1` with `eu-central-1`).
-  - `media.example.com` is the R2 custom domain.
-  - Websites call `cms.example.com/api/*`.
+- **Where things live:**
+  - **CMS:** `cms.example.com` on Vercel, in the same region as Supabase.
+  - **Images:** `media.example.com`, the R2 custom domain.
+  - **Website:** `www.example.com`, which reads Supabase directly.
 - **Environments:**
+  - Simplest: one Supabase project plus a separate **dev bucket** for local work.
+  - Safer: a second free Supabase project for development and previews.
+  - The local Docker stack (`supabase start`) is optional. If you use it, set `[api] auto_expose_new_tables = false` in `supabase/config.toml` so it behaves like production.
+- **Migrations:** run `pnpm db:push` **before** deploying code that needs the change.
+- **Plans and costs** (approximate):
 
-  | Environment | App | Database | Storage |
-  |---|---|---|---|
-  | local | `next dev` | `supabase start` | dev bucket |
-  | preview | Vercel preview deployments | dev Supabase project | dev bucket |
-  | production | Vercel production | prod Supabase project | prod bucket |
-- **Migrations:** run `supabase db push` against production *before* promoting the deploy that needs them, manually or from CI with an approval step.
-- **Plans:**
-  - **Supabase Pro** for production gives daily backups (7 days) and no pausing. The free tier is fine for dev.
-  - **Vercel Hobby** is for non-commercial use only; use Pro for a business.
-  - **Self-hosting alternative:** `output: 'standalone'` in Docker on any Node host. Set `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` when running more than one instance.
-- **Observability:** Vercel logs and Observability, Supabase logs and Advisors, and the in-app webhook delivery log. Sentry is optional.
-- **Rough monthly cost at personal scale:**
-
-  | Service | Free tier | Paid |
+  | Service | Free tier | Recommended for a business site |
   |---|---|---|
-  | R2 | ≈ $0 (10 GB free) | — |
-  | Image Transformations | $0 (≤ 5k unique per month) | — |
-  | Supabase | $0 for dev | $25 Pro |
-  | Vercel | $0 Hobby | $20 Pro |
-- **Runbooks** (written in Phase 7):
-  - create a user;
-  - reset a password;
-  - deactivate a user;
-  - rotate the API token pepper, R2 keys and webhook secrets;
-  - restore the database;
-  - reconcile orphaned media.
+  | **Supabase** | Free: **no backups**; pauses after ~7 days of low activity (daily website traffic usually prevents this) | **Pro, from $25/month**: daily backups kept 7 days, never paused |
+  | **Cloudflare R2** | 10 GB storage, 1M writes and 10M reads per month, **free egress** | stays free at this scale |
+  | **Vercel** | Hobby is for non-commercial use only | **Pro, $20/month per member** for a business |
+
+- **Backups:**
+  - On Supabase Pro, daily backups are automatic.
+  - On Free, run `supabase db dump` weekly and keep the file somewhere private.
+  - R2 images are **not** part of database backups. Copy the bucket occasionally if losing images would hurt (backlog).
+- **Runbooks** for the README:
+  - add or remove an admin ([§6.5](#65-managing-admins));
+  - reset a password ([§7.4](#74-passwords));
+  - rotate the R2 token (create the new one → update Vercel → delete the old one);
+  - remove a sensitive image ([§8.6](#86-deleting-images));
+  - restore the database.
 
 ---
 
-## 19. Security checklist
+## 18. Security & privacy checklist
 
-- [ ] Supabase: sign-ups off, Data API off, RLS on for every table, default privileges revoked, Security Advisor clean.
-- [ ] Every Server Action and admin page calls `requireUser()`. `proxy.ts` is only an optimistic gate.
-- [ ] `import 'server-only'` in every server module, and no secret uses a `NEXT_PUBLIC_` name.
-- [ ] Every input is validated with Zod: action payloads, API query strings (strict `qs` limits), and IDs.
-- [ ] The login `next` parameter only accepts `/admin…` paths, so there are no open redirects. Login errors are generic.
-- [ ] API tokens: 256-bit random, HMAC-hashed, shown once, with expiry, regeneration and revocation.
-- [ ] The public API never returns private fields or drafts without a full-access token. Page size ≤ 100; statement timeout 5 s.
-- [ ] Uploads:
-  - presigned URLs live 5 minutes and sign content type and length;
+- [ ] **Supabase Auth:** sign-ups off, anonymous sign-ins off, a minimum password length set, and only allowlisted users in `admins`.
+- [ ] **Database:**
+  - RLS is on for every table;
+  - explicit grants are in place (`anon` = SELECT only);
+  - the policies have been checked ([§6.6](#66-checking-the-rules));
+  - the Security Advisor is clean.
+- [ ] **Keys:**
+  - only the publishable key is used by the CMS and the website;
+  - the secret key never reaches Vercel or the browser;
+  - no secret has a `NEXT_PUBLIC_` name.
+- [ ] **Server code:**
+  - every page, data function and Server Action calls `requireAdmin()`;
+  - every action validates its input with Zod;
+  - `server-only` is imported in all server modules.
+- [ ] **Login:**
+  - a generic error message;
+  - `next` accepts only same-site paths;
+  - Supabase's per-IP rate limits apply;
+  - optionally Turnstile.
+- [ ] **Rich text** is sanitized on the server with an allowlist; images in it may only come from our media domain.
+- [ ] **Uploads:**
   - keys are generated by the server;
-  - the MIME allowlist excludes SVG and HTML;
-  - every upload is verified with HeadObject;
-  - the R2 token is scoped to one bucket.
-- [ ] The media hostname is separate from the admin and sends `nosniff`; non-image downloads are served as attachments.
-- [ ] Webhooks: HMAC signatures with timestamps, HTTPS only, and no secrets in logs.
-- [ ] Security headers (`X-Frame-Options`, `nosniff`, `Referrer-Policy`) and a CSP for the admin.
-- [ ] Rate limiting: Supabase's auth limits, optional Turnstile on login, and optional API rate limits.
-- [ ] Backups exist and a restore has been tested.
+  - presigned URLs last 5 minutes and are locked to one type and size;
+  - SVG is not allowed;
+  - every upload is checked with `HeadObject` on save;
+  - the R2 token is scoped to one bucket;
+  - the media domain sends `nosniff`.
+- [ ] **Privacy (GDPR):**
+  - EXIF is stripped;
+  - personal data on documents is blurred;
+  - consent is recorded before publishing;
+  - names are kept short;
+  - you know how to purge a published image from the CDN.
+- [ ] **CMS hygiene:** `noindex` everywhere, plus the security headers (`X-Frame-Options`, `nosniff`, `Referrer-Policy`).
+- [ ] **Backups exist** and one restore has been tested.
 
 ---
 
-## 20. Backlog (after v1)
+## 19. Later (backlog)
 
-- **i18n:** a `locale` column with per-locale snapshots and a `locale` API parameter. `id` stays the document ID, so relations remain valid.
-- **Content history:** snapshots on save and publish, with diff and restore.
-- **Roles:** *editor* (content and media only) and *author* (own entries).
-- **REST write API** (create/update/delete/publish) and **custom token permissions** per type and action.
-- **Scheduled publish/unpublish** via Vercel Cron.
-- **Media:** folders, upload from URL, focal point and crop, multipart upload for large files.
-- **API:** nested `populate`, filtering on fields of related entries, and full-text search (a generated `jsonb_to_tsvector` column + GIN).
-- **Editor:** conditional fields (show a field when another field has a value).
-- **Export/import** as JSON, **TypeScript type generation** for consumer sites, and an **OpenAPI** spec.
-- **Audit log** and **MFA** (Supabase), plus changing your own password from the profile page.
-- **Performance:** Cache Components (`use cache` + `cacheTag`) for API reads, and expression indexes for hot fields.
-- **Webhooks:** durable delivery through a queue.
-- **An MCP server** so AI agents can read and write content.
-
----
-
-## 21. Risks & open questions
-
-### Risks
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| JSONB queries slow down as data grows | API latency | GIN containment for equality; expression indexes per hot field via migrations; strict page limits |
-| A schema-change bug corrupts content | Data loss | Transactional migrations, integration tests, backups before large changes |
-| Pre-1.0 dependency (`@dnd-kit/react` 0.5) | Breaking updates | Pin exact versions; wrap it in our own sortable components |
-| Changes in AWS SDK checksum behaviour | Uploads break | `WHEN_REQUIRED` flags plus an E2E upload test in CI |
-| The Supabase free tier pauses | API outage | Pro plan in production |
-| The image-transformation quota runs out | New variants fail (9422) | Limit the set of widths; fall back to the original URL |
-| Duplicate validation logic on client and server | Inconsistent rules | One `buildEntrySchema` used on both sides |
-| Vendor lock-in | Migration cost | Data is plain Postgres and the S3 API; Supabase is used only for Auth |
-
-### Open questions (defaults in bold)
-
-1. **Domains:** `cms.<your-domain>` for the admin and API, and `media.<your-domain>` for files? **Yes.**
-2. **Hosting:** **Vercel**, or a self-hosted Docker/Node server?
-3. **Data residency:** an EU Supabase region and an EU-jurisdiction R2 bucket? **Yes, EU.** The bucket choice can't be changed later.
-4. **Rich text output:** **HTML by default (Tiptap JSON stored)**, or Markdown?
-5. **i18n at launch?** **No** (backlog).
-6. **One admin role for v1?** **Yes.**
-7. **Allow SVG uploads?** **No.**
-8. **Supabase plan for production:** **Pro**, for backups and no pausing?
+- **Media:** a media library to reuse images; galleries (several images per item, e.g. for success stories); the unused-image cleanup, if not done in Phase 8.
+- **Content:**
+  - categories for blog and news;
+  - manual ordering (drag & drop) for testimonials and galleries;
+  - scheduled *unpublish*;
+  - duplicating an item.
+- **Website integration:** draft preview using Next.js Draft Mode with a signed preview link.
+- **Languages:** multi-language content (e.g. Polish + English), either a `locale` column or per-language fields. Decide early if you need it ([§20](#20-open-questions)).
+- **History and audit:** revision history (who changed what, restore an old version), and an activity log.
+- **Accounts:** a "Change my password" page and MFA for admins (Supabase supports TOTP).
+- **Look and feel:** dark mode, bulk actions in lists, and a search across all content types.
+- **Operations:** periodic R2 backup with rclone, and error monitoring with Sentry.
 
 ---
 
-## 22. References
+## 20. Open questions
 
-**Next.js 16.3** (bundled docs, under `node_modules/next/dist/docs/01-app/`)
-- `02-guides/upgrading/version-16.md`
-- `03-api-reference/03-file-conventions/proxy.md`
-- `02-guides/authentication.md`, `data-security.md`, `server-actions.md`
-- `01-getting-started/15-route-handlers.md`, `08-caching.md`
-- `03-api-reference/04-functions/after.md`
-- `03-api-reference/05-config/01-next-config-js/{images,serverActions,typedRoutes}.md`
-- `02-guides/preventing-flash-before-hydration.md`
+The default answer is in **bold**; the plan assumes it.
 
-**Strapi 5**
-- https://docs.strapi.io/cms/features/content-type-builder
-- https://docs.strapi.io/cms/features/content-manager
-- https://docs.strapi.io/cms/features/draft-and-publish
-- https://docs.strapi.io/cms/features/media-library
-- https://docs.strapi.io/cms/api/rest
-- https://docs.strapi.io/cms/api/rest/filters
-- https://docs.strapi.io/cms/api/rest/populate-select
-- https://docs.strapi.io/cms/api/rest/sort-pagination
-- https://docs.strapi.io/cms/features/api-tokens
-- https://docs.strapi.io/cms/backend-customization/webhooks
+1. **Fields per table.** Do the fields in [§6.2](#62-fields-per-table-proposed) match what your website shows? **Yes, as proposed.** Please review them before Phase 1.
+2. **Languages.** Is the content in one language? **Yes, one language.** If you need two (e.g. Polish and English), decide before Phase 1, because it changes the tables.
+3. **Domains.** `cms.<your-domain>` for the CMS and `media.<your-domain>` for images? **Yes.**
+4. **R2 data location.** Use an **EU-jurisdiction bucket**, or only a location hint? This can't be changed later.
+5. **Hosting.** **Vercel**, or your own Node/Docker server?
+6. **Supabase plan for production.** **Pro**, for backups and no pausing, or Free plus weekly manual dumps?
+7. **Website framework.** **Next.js** (the examples in §12 use it) or something else? The queries are the same either way.
+8. **Website URLs.** Are the detail pages at `/blog/<slug>`, `/news/<slug>` and `/success-stories/<slug>`? **Yes**; they're configurable in `collections.ts`.
+9. **Personal data.** Do visa stamps and work permits show names at all? **Optional field, first names or initials only**, with document details blurred.
 
-**Supabase / Postgres / Drizzle**
-- https://supabase.com/docs/guides/auth/server-side/creating-a-client
+---
+
+## 21. References
+
+**Next.js 16.3** (bundled docs in `node_modules/next/dist/docs/01-app/`)
+- `01-getting-started/16-proxy.md`, `03-api-reference/03-file-conventions/proxy.md`
+- `01-getting-started/07-mutating-data.md`, `02-guides/server-actions.md`, `02-guides/forms.md`
+- `02-guides/authentication.md`, `02-guides/data-security.md`
+- `02-guides/caching-without-cache-components.md`, `02-guides/incremental-static-regeneration.md`, `01-getting-started/09-revalidating.md`
+- `03-api-reference/04-functions/{after,refresh,revalidatePath,generate-static-params}.md`
+- `03-api-reference/02-components/image.md` (`remotePatterns`, `preload` / deprecated `priority`)
+- `03-api-reference/03-file-conventions/01-metadata/robots.md`
+
+**Supabase**
+- https://supabase.com/docs/guides/auth/server-side/creating-a-client (Next.js SSR setup)
 - https://supabase.com/docs/reference/javascript/auth-getclaims
-- https://supabase.com/docs/guides/auth/signing-keys
 - https://supabase.com/docs/guides/getting-started/api-keys
 - https://supabase.com/docs/guides/auth/general-configuration
 - https://supabase.com/docs/guides/auth/rate-limits
-- https://supabase.com/docs/guides/auth/managing-user-data
-- https://supabase.com/docs/guides/database/connecting-to-postgres
-- https://supabase.com/docs/guides/database/drizzle
+- https://supabase.com/docs/guides/database/postgres/row-level-security
 - https://supabase.com/docs/guides/api/securing-your-api
-- https://supabase.com/docs/guides/database/database-advisors
-- https://supabase.com/docs/guides/platform/backups
-- https://github.com/orgs/supabase/discussions/29260 (API keys timeline)
-- https://github.com/orgs/supabase/discussions/45329 (Data API grants change)
-- https://orm.drizzle.team/docs/upgrade-v1
-- https://www.postgresql.org/docs/current/datatype-json.html#JSON-INDEXING
+- https://supabase.com/docs/guides/troubleshooting/do-i-need-to-expose-security-definer-functions-in-row-level-security-policies-iI0uOw
+- https://supabase.com/changelog/45329-breaking-change-tables-not-exposed-to-data-and-graphql-api-automatically (and discussion #45329)
+- https://supabase.com/docs/guides/api/rest/generating-types
+- https://supabase.com/docs/reference/javascript/select (counts, ranges)
+- https://supabase.com/docs/guides/platform/backups, https://supabase.com/docs/guides/platform/free-project-pausing, https://supabase.com/pricing
 
-**Cloudflare R2 / Images**
+**Cloudflare R2**
 - https://developers.cloudflare.com/r2/examples/aws/aws-sdk-js-v3/
 - https://developers.cloudflare.com/r2/api/s3/presigned-urls/
 - https://developers.cloudflare.com/r2/buckets/cors/
 - https://developers.cloudflare.com/r2/buckets/public-buckets/
-- https://developers.cloudflare.com/r2/buckets/object-lifecycles/
-- https://developers.cloudflare.com/r2/platform/limits/
-- https://developers.cloudflare.com/r2/pricing/
 - https://developers.cloudflare.com/r2/reference/data-location/
-- https://developers.cloudflare.com/images/optimization/transformations/overview/
-- https://developers.cloudflare.com/images/optimization/transformations/integrate-with-frameworks/
+- https://developers.cloudflare.com/r2/pricing/
 - https://developers.cloudflare.com/cache/how-to/purge-cache/
-- https://github.com/aws/aws-sdk-js-v3/issues/6810 (checksum defaults)
-- https://github.com/aws/aws-sdk-js-v3/issues/3497 (Content-Type not signed)
+- https://github.com/aws/aws-sdk-js-v3/issues/6810 (checksum defaults), https://github.com/aws/aws-sdk-js-v3/issues/3497 (Content-Type not signed)
 
-**UI & tooling**
-- https://ui.shadcn.com/docs/installation/next
-- https://ui.shadcn.com/docs/changelog/2026-07-base-ui-default
-- https://ui.shadcn.com/docs/components/combobox
-- https://react-hook-form.com
-- https://zod.dev
+**Editor, forms & UI**
 - https://tiptap.dev/docs/editor/getting-started/install/nextjs
-- https://tiptap.dev/docs/editor/api/utilities/static-renderer
-- https://tanstack.com/table/latest
-- https://dndkit.com/react/guides/migration/
-- https://nuqs.dev
-- https://github.com/ljharb/qs
-- https://biomejs.dev
+- https://tiptap.dev/docs/editor/extensions/functionality/starterkit
+- https://tiptap.dev/docs/editor/extensions/nodes/image
+- https://tiptap.dev/docs/editor/extensions/functionality/filehandler
+- https://tiptap.dev/docs/guides/performance (`useEditorState`)
+- https://github.com/apostrophecms/sanitize-html
+- https://developer.mozilla.org/docs/Web/API/HTMLCanvasElement/toBlob (no WebP encoding in Safari)
+- https://react-hook-form.com · https://zod.dev · https://ui.shadcn.com/docs/installation/next
