@@ -7,7 +7,8 @@ testimonials, visa stamps and work permits.
 - **Data** lives in Supabase, in tables prefixed with `eu_`. **Images** live in Cloudflare R2.
 - **The public website reads Supabase directly.** Visitors can only ever see published items.
 
-Built with Next.js 16 (App Router), React 19, shadcn/ui (Base UI), Tiptap 3 and Supabase. The design notes are in
+Built with Next.js 16 (App Router), React 19, shadcn/ui (Base UI), Motion, Tiptap 3 and Supabase, with light and
+dark mode. The design notes are in
 [`plan.md`](plan.md).
 
 ## Getting started

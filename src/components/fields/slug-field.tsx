@@ -42,7 +42,9 @@ export function SlugField({ field }: { field: FieldConfig }) {
           <InputGroup>
             {collection.slugPrefix && (
               <InputGroupAddon>
-                <InputGroupText className="font-mono text-xs">{collection.slugPrefix}</InputGroupText>
+                <InputGroupText className="pl-1 font-mono text-xs text-muted-foreground/80">
+                  {collection.slugPrefix}
+                </InputGroupText>
               </InputGroupAddon>
             )}
             <InputGroupInput
@@ -78,8 +80,8 @@ export function SlugField({ field }: { field: FieldConfig }) {
             </InputGroupAddon>
           </InputGroup>
           {changedWhilePublished && (
-            <p className="flex items-center gap-1.5 text-xs text-amber-700">
-              <TriangleAlertIcon className="size-3.5" />
+            <p className="flex items-center gap-1.5 rounded-lg bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-800 animate-in fade-in-0 slide-in-from-top-1 dark:text-amber-200">
+              <TriangleAlertIcon className="size-3.5 shrink-0" />
               This page is live. Changing its address breaks links that point to the old one.
             </p>
           )}

@@ -17,11 +17,13 @@ export function FieldShell({
   length?: number
   children: ReactNode
 }) {
-  const over = field.maxLength !== undefined && length !== undefined && length > field.maxLength
+  const max = field.maxLength
+  const over = max !== undefined && length !== undefined && length > max
+  const near = max !== undefined && length !== undefined && !over && length >= max * 0.9
   return (
     <Field data-invalid={error ? true : undefined}>
-      <div className="flex items-baseline justify-between gap-3">
-        <FieldLabel htmlFor={htmlFor}>
+      <div className="flex items-center justify-between gap-3">
+        <FieldLabel htmlFor={htmlFor} className="items-center gap-1.5">
           {field.label}
           {field.required === "always" && (
             <span aria-hidden className="text-destructive">
@@ -29,17 +31,25 @@ export function FieldShell({
             </span>
           )}
           {field.required === "publish" && (
-            <span className="text-xs font-normal text-muted-foreground">· needed to publish</span>
+            <span className="rounded-full bg-amber-500/10 px-1.5 py-px text-[10.5px] font-medium text-amber-700 ring-1 ring-amber-600/15 ring-inset dark:text-amber-300 dark:ring-amber-400/20">
+              Needed to publish
+            </span>
           )}
         </FieldLabel>
-        {field.maxLength !== undefined && length !== undefined && (
-          <span className={cn("text-xs tabular-nums text-muted-foreground", over && "font-medium text-destructive")}>
-            {length}/{field.maxLength}
+        {max !== undefined && length !== undefined && (
+          <span
+            className={cn(
+              "text-xs text-muted-foreground tabular-nums transition-colors",
+              near && "text-amber-600 dark:text-amber-400",
+              over && "font-medium text-destructive",
+            )}
+          >
+            {length}/{max}
           </span>
         )}
       </div>
       {children}
-      {field.help && <FieldDescription>{field.help}</FieldDescription>}
+      {field.help && <FieldDescription className="text-xs">{field.help}</FieldDescription>}
       <FieldError>{error}</FieldError>
     </Field>
   )

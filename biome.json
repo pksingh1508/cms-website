@@ -7,7 +7,13 @@
   },
   "files": {
     "ignoreUnknown": true,
-    "includes": ["**", "!src/components/ui", "!src/hooks", "!src/lib/supabase/database.types.ts", "!supabase"]
+    "includes": [
+      "**",
+      "!src/components/ui",
+      "!src/hooks/use-mobile.ts",
+      "!src/lib/supabase/database.types.ts",
+      "!supabase"
+    ]
   },
   "formatter": {
     "enabled": true,

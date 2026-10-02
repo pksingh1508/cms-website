@@ -2,6 +2,7 @@ import { PlusIcon } from "lucide-react"
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 import { ButtonLink } from "@/components/button-link"
+import { CollectionIcon } from "@/components/collection-icon"
 import { EmptyState } from "@/components/items/empty-state"
 import { ItemsGrid } from "@/components/items/items-grid"
 import { ItemsTable } from "@/components/items/items-table"
@@ -42,12 +43,15 @@ export default async function ListPage({ params, searchParams }: PageProps<"/[co
           <span className="sm:hidden">New</span>
         </ButtonLink>
       </PageHeader>
-      <div className="mx-auto w-full max-w-7xl space-y-4 p-4 sm:p-6">
-        <div className="flex items-center gap-3">
-          <collection.icon className="size-5 text-muted-foreground" />
-          <h1 className="text-xl font-semibold tracking-tight">{collection.label}</h1>
+      <div className="mx-auto w-full max-w-7xl space-y-5 p-4 animate-in fade-in-0 slide-in-from-bottom-1 duration-500 sm:p-6 lg:p-8">
+        <div className="flex items-center gap-4">
+          <CollectionIcon collection={collection} size="lg" />
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">{collection.label}</h1>
+            <p className="truncate text-sm text-muted-foreground">{collection.description}</p>
+          </div>
         </div>
-        <ListToolbar collection={collection} q={q} status={status} />
+        <ListToolbar slug={collection.slug} searchPlaceholder={collection.searchPlaceholder} q={q} status={status} />
         {rows.length === 0 ? (
           <EmptyState collection={collection} filtered={Boolean(q || status || page > 1)} />
         ) : (

@@ -26,6 +26,9 @@ export type ContentStatus = "draft" | "published"
 
 export type FieldType = "text" | "textarea" | "slug" | "richtext" | "image" | "url" | "country" | "tags" | "number"
 
+/** Accent colour of a content type in the CMS (icons, highlights). */
+export type Tone = "blue" | "violet" | "amber" | "rose" | "emerald" | "cyan"
+
 export type FieldConfig = {
   /** Column name. An "image" field named "image" maps to image_url, image_alt, image_width and image_height. */
   name: string
@@ -52,6 +55,7 @@ export type CollectionConfig = {
   singular: string
   description: string
   icon: LucideIcon
+  tone: Tone
   fields: FieldConfig[]
   /** Column searched by the list's search box. */
   searchField: string
@@ -96,6 +100,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "Blog post",
     description: "Articles and guides",
     icon: BookOpenIcon,
+    tone: "blue",
     view: "table",
     searchField: "title",
     searchPlaceholder: "Search titles…",
@@ -145,6 +150,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "News article",
     description: "Immigration news",
     icon: NewspaperIcon,
+    tone: "violet",
     view: "table",
     searchField: "title",
     searchPlaceholder: "Search titles…",
@@ -177,6 +183,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "Success story",
     description: "Stories of placed candidates",
     icon: TrophyIcon,
+    tone: "amber",
     view: "table",
     searchField: "name",
     searchPlaceholder: "Search names…",
@@ -210,6 +217,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "Testimonial",
     description: "What clients say",
     icon: MessageSquareQuoteIcon,
+    tone: "rose",
     view: "table",
     searchField: "name",
     searchPlaceholder: "Search names…",
@@ -230,6 +238,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "Visa stamp",
     description: "Gallery of approved visas",
     icon: StampIcon,
+    tone: "emerald",
     view: "grid",
     searchField: "country",
     searchPlaceholder: "Search by country…",
@@ -250,6 +259,7 @@ export const COLLECTIONS: CollectionConfig[] = [
     singular: "Work permit",
     description: "Gallery of issued work permits",
     icon: BriefcaseBusinessIcon,
+    tone: "cyan",
     view: "grid",
     searchField: "country",
     searchPlaceholder: "Search by country…",

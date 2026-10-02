@@ -1,6 +1,7 @@
 "use client"
 
 import { XIcon } from "lucide-react"
+import { AnimatePresence, motion } from "motion/react"
 import { useState } from "react"
 import { Controller } from "react-hook-form"
 import { errorMessage, FieldShell } from "@/components/fields/field-shell"
@@ -54,26 +55,33 @@ function TagsInput({
   return (
     <div
       className={cn(
-        "flex min-h-8 flex-wrap items-center gap-1.5 rounded-lg border border-input bg-transparent px-2 py-1 transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "flex min-h-9 flex-wrap items-center gap-1.5 rounded-lg border border-input bg-card px-2 py-1.5 shadow-sm transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20 dark:bg-input/30",
         invalid && "border-destructive ring-3 ring-destructive/20",
       )}
     >
-      {value.map((tag) => (
-        <span
-          key={tag}
-          className="inline-flex items-center gap-1 rounded-md bg-secondary px-2 py-0.5 text-xs font-medium"
-        >
-          {tag}
-          <button
-            type="button"
-            onClick={() => onChange(value.filter((t) => t !== tag))}
-            className="rounded text-muted-foreground hover:text-foreground"
-            aria-label={`Remove ${tag}`}
+      <AnimatePresence initial={false}>
+        {value.map((tag) => (
+          <motion.span
+            key={tag}
+            layout
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+            transition={{ type: "spring", stiffness: 500, damping: 32 }}
+            className="inline-flex items-center gap-1 rounded-full bg-secondary py-0.5 pr-1 pl-2.5 text-xs font-medium ring-1 ring-foreground/[0.06] ring-inset"
           >
-            <XIcon className="size-3" />
-          </button>
-        </span>
-      ))}
+            {tag}
+            <button
+              type="button"
+              onClick={() => onChange(value.filter((t) => t !== tag))}
+              className="rounded-full p-0.5 text-muted-foreground transition-colors hover:bg-foreground/10 hover:text-foreground"
+              aria-label={`Remove ${tag}`}
+            >
+              <XIcon className="size-3" />
+            </button>
+          </motion.span>
+        ))}
+      </AnimatePresence>
       <input
         id={id}
         value={draft}

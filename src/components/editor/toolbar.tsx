@@ -56,7 +56,7 @@ export function Toolbar({
     <div
       role="toolbar"
       aria-label="Formatting"
-      className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 p-1"
+      className="flex flex-wrap items-center gap-0.5 border-b bg-muted/40 px-1.5 py-1.5"
     >
       <Tool
         icon={PilcrowIcon}
@@ -146,7 +146,11 @@ export function Tool({
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()} // keep the editor's selection
       onClick={onClick}
-      className={cn(active && "bg-background text-foreground shadow-sm ring-1 ring-border")}
+      className={cn(
+        "size-8 rounded-lg text-muted-foreground hover:text-foreground",
+        active &&
+          "bg-card text-foreground shadow-sm ring-1 ring-foreground/10 hover:bg-card dark:bg-white/10 dark:hover:bg-white/15",
+      )}
     >
       <Icon />
     </Button>
@@ -154,5 +158,5 @@ export function Tool({
 }
 
 function Divider() {
-  return <span aria-hidden className="mx-1 h-5 w-px bg-border" />
+  return <span aria-hidden className="mx-1 h-5 w-px bg-foreground/10" />
 }

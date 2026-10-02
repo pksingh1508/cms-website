@@ -87,7 +87,8 @@ export function RichTextEditor({
     content: value || "",
     editorProps: {
       attributes: {
-        class: "prose prose-neutral max-w-none min-h-80 px-4 py-3 text-[15px] focus:outline-none",
+        class:
+          "prose prose-neutral dark:prose-invert max-w-none min-h-80 px-5 py-4 text-[15px] focus:outline-none prose-headings:tracking-tight prose-a:text-brand-ink prose-a:decoration-brand/50 prose-blockquote:border-l-brand prose-blockquote:not-italic prose-img:shadow-sm",
         "aria-label": "Content",
       },
     },
@@ -102,7 +103,7 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-lg border border-input bg-background transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50",
+        "overflow-hidden rounded-xl border border-input bg-card shadow-sm transition-[border-color,box-shadow] focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/20 dark:bg-input/20",
         invalid && "border-destructive ring-3 ring-destructive/20",
       )}
     >
@@ -116,7 +117,7 @@ export function RichTextEditor({
           <EditorContent editor={editor} className="max-h-[70vh] overflow-y-auto" />
         </>
       ) : (
-        <div className="min-h-[22rem] animate-pulse bg-muted/40" />
+        <div className="min-h-[22rem] animate-pulse bg-muted/40" aria-hidden />
       )}
     </div>
   )

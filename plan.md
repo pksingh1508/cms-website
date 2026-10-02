@@ -252,6 +252,8 @@ Versions as installed on 2026-10-03.
 | Framework | Next.js (App Router, Turbopack) + React | 16.3.8 / 19.2.8 | `src/proxy.ts` instead of middleware |
 | Language & styling | TypeScript (strict), Tailwind CSS + `@tailwindcss/typography` | 5.x / 4.x / 0.5 | |
 | UI kit | shadcn/ui (CLI v4, Base UI 1.8) + lucide-react + sonner | 4.21 / 1.50 / 2.0 | components are copied into `src/components/ui` |
+| Animation | Motion (`motion/react`, `motion/react-client` in Server Components) | 14.0 | entrance, layout and gesture animations; respects "reduce motion" |
+| Themes | next-themes | 0.4.6 | light, dark and system; the switch animates with the View Transitions API |
 | Forms | react-hook-form + @hookform/resolvers + zod | 7.89 / 5.9 / 4.6 | the same Zod schemas run in the browser and on the server |
 | Supabase | @supabase/supabase-js + @supabase/ssr; Supabase CLI | 2.117 / 0.12.7; 2.119 | cookie-based sessions; migrations and type generation |
 | Images | @aws-sdk/client-s3 | 3.1145 | R2 speaks the S3 API |
@@ -698,7 +700,8 @@ The content pages are one dynamic segment, `src/app/(cms)/[collection]/…`. An 
   - **Home**;
   - **Content:** the six types with icons;
   - at the bottom: **Open website ↗**, your email, and **Sign out**.
-- **Header:** a menu button and breadcrumbs (Home / Blog / title). On phones only the last crumb is shortened.
+- **Header:** a menu button, breadcrumbs (Home / Blog / title) and the theme toggle. On phones only the last crumb is shortened.
+- **Look:** the brand yellow of eucareerserwis.pl with warm neutrals; light and dark mode (Light / Dark / System in the account menu). Switching theme reveals the new one in a circle from the toggle. Each content type has its own accent colour (`tone` in the config).
 - The CMS is told **never to be indexed** by search engines, through the `robots` metadata, `robots.txt` and an `X-Robots-Tag` header.
 
 ### 10.4 Home

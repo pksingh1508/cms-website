@@ -1,13 +1,15 @@
 "use client"
 
 import { zodResolver } from "@hookform/resolvers/zod"
-import { ChevronDownIcon, ExternalLinkIcon, LoaderCircleIcon, Trash2Icon } from "lucide-react"
+import { CalendarClockIcon, CheckIcon, ChevronDownIcon, ExternalLinkIcon, SearchIcon, Trash2Icon } from "lucide-react"
+import { AnimatePresence, motion } from "motion/react"
 import { useRouter } from "next/navigation"
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react"
 import { type FieldErrors, FormProvider, type Resolver, useForm, useWatch } from "react-hook-form"
 import { toast } from "sonner"
 import { deleteItem, saveItem } from "@/actions/items"
 import { ButtonLink } from "@/components/button-link"
+import { CollectionIcon } from "@/components/collection-icon"
 import { FieldRenderer } from "@/components/fields/field-renderer"
 import { PublishDateField } from "@/components/fields/publish-date-field"
 import { CountrySuggestions } from "@/components/fields/simple-fields"
@@ -18,6 +20,8 @@ import { StatusBadge } from "@/components/items/status-badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { Kbd, KbdGroup } from "@/components/ui/kbd"
+import { Spinner } from "@/components/ui/spinner"
 import { type ContentStatus, getCollection } from "@/config/collections"
 import type { FormValues } from "@/lib/mapping"
 import { buildSchema, type SaveMode } from "@/lib/schemas"
@@ -182,6 +186,27 @@ export function ItemForm({ collection: slug, item, websiteUrl }: ItemFormProps) 
   const liveUrl =
     saved.status === "published" ? websiteHref(collection, { ...item.values, slug: saved.slug }, websiteUrl) : null
 
+  const actions =
+    saved.status === "published" ? (
+      <>
+        <Button type="button" variant="outline" onClick={() => save("draft")} disabled={busy}>
+          Unpublish
+        </Button>
+        <Button type="button" onClick={() => save("published")} disabled={busy}>
+          Save changes
+        </Button>
+      </>
+    ) : (
+      <>
+        <Button type="button" variant="outline" onClick={() => save("draft")} disabled={busy}>
+          Save draft
+        </Button>
+        <Button type="button" onClick={() => save("published")} disabled={busy}>
+          Publish
+        </Button>
+      </>
+    )
+
   return (
     <ItemProvider value={{ collection, isNew: !saved.id, status: saved.status, savedSlug: saved.slug, beginUpload }}>
       <FormProvider {...form}>
@@ -192,62 +217,53 @@ export function ItemForm({ collection: slug, item, websiteUrl }: ItemFormProps) 
             save(saved.status)
           }}
         >
-          <div className="sticky top-14 z-20 flex flex-wrap items-center gap-x-4 gap-y-2 border-b bg-background/95 px-4 py-3 backdrop-blur sm:px-6">
-            <div className="min-w-0 flex-1">
-              <Heading isNew={!saved.id} />
-              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                <StatusBadge status={saved.status} publishedAt={saved.publishedAt} />
-                {uploads > 0 ? (
-                  <span>Uploading image…</span>
-                ) : isDirty ? (
-                  <span className="font-medium text-amber-700">Unsaved changes</span>
-                ) : saved.id ? (
-                  <span>All changes saved</span>
-                ) : null}
+          <div className="glass sticky top-14 z-20 border-b border-border/70 px-4 py-3 sm:px-6">
+            <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-4 gap-y-3">
+              <CollectionIcon collection={collection} className="hidden sm:inline-flex" />
+              <div className="min-w-0 flex-1">
+                <Heading isNew={!saved.id} />
+                <div className="mt-1 flex h-6 min-w-0 items-center gap-2.5 overflow-hidden text-xs text-muted-foreground">
+                  <StatusBadge status={saved.status} publishedAt={saved.publishedAt} />
+                  <SaveState pending={pending} uploading={uploads > 0} dirty={isDirty} saved={Boolean(saved.id)} />
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {pending && <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground" />}
-              {saved.status === "published" ? (
-                <>
-                  <Button type="button" variant="outline" onClick={() => save("draft")} disabled={busy}>
-                    Unpublish
-                  </Button>
-                  <Button type="button" onClick={() => save("published")} disabled={busy}>
-                    Save changes
-                  </Button>
-                </>
-              ) : (
-                <>
-                  <Button type="button" variant="outline" onClick={() => save("draft")} disabled={busy}>
-                    Save draft
-                  </Button>
-                  <Button type="button" onClick={() => save("published")} disabled={busy}>
-                    Publish
-                  </Button>
-                </>
-              )}
+              <div className="hidden items-center gap-2 sm:flex">{actions}</div>
             </div>
           </div>
 
-          <div className="grid gap-6 p-4 sm:p-6 lg:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
+          {/* Phones: the save buttons stay at the bottom of the screen */}
+          <div className="glass fixed inset-x-0 bottom-0 z-30 flex gap-2 border-t border-border/70 px-4 pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:hidden [&>button]:flex-1">
+            {actions}
+          </div>
+
+          <div className="mx-auto grid w-full max-w-6xl gap-6 p-4 pb-28 animate-in fade-in-0 slide-in-from-bottom-1 duration-500 sm:p-6 lg:grid-cols-[minmax(0,1fr)_20rem] xl:grid-cols-[minmax(0,1fr)_22rem]">
             <div className="min-w-0 space-y-6">
-              {main.map((field) => (
-                <FieldRenderer key={field.name} field={field} />
-              ))}
+              <section className="space-y-6 rounded-2xl border bg-card p-5 shadow-sm sm:p-6 dark:shadow-[inset_0_1px_0_var(--highlight)]">
+                {main.map((field) => (
+                  <FieldRenderer key={field.name} field={field} />
+                ))}
+              </section>
 
               {seo.length > 0 && (
-                <Collapsible className="rounded-xl border">
-                  <CollapsibleTrigger className="group flex w-full items-center justify-between px-4 py-3 text-left text-sm font-medium">
-                    <span>
-                      Search engines (SEO) <span className="font-normal text-muted-foreground">· optional</span>
+                <Collapsible className="rounded-2xl border bg-card shadow-sm dark:shadow-[inset_0_1px_0_var(--highlight)]">
+                  <CollapsibleTrigger className="group flex w-full items-center gap-3 rounded-2xl px-5 py-4 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40">
+                    <span className="flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                      <SearchIcon className="size-4" />
                     </span>
-                    <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold tracking-tight">Search engines (SEO)</span>
+                      <span className="block text-xs text-muted-foreground">
+                        How this page looks on Google · optional
+                      </span>
+                    </span>
+                    <ChevronDownIcon className="size-4 text-muted-foreground transition-transform duration-300 ease-out-expo group-data-[panel-open]:rotate-180" />
                   </CollapsibleTrigger>
-                  <CollapsibleContent className="space-y-6 border-t px-4 py-4">
-                    {seo.map((field) => (
-                      <FieldRenderer key={field.name} field={field} />
-                    ))}
+                  <CollapsibleContent className="h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-300 ease-out-expo data-ending-style:h-0 data-starting-style:h-0">
+                    <div className="space-y-6 border-t px-5 py-5">
+                      {seo.map((field) => (
+                        <FieldRenderer key={field.name} field={field} />
+                      ))}
+                    </div>
                   </CollapsibleContent>
                 </Collapsible>
               )}
@@ -256,7 +272,10 @@ export function ItemForm({ collection: slug, item, websiteUrl }: ItemFormProps) 
             <aside className="space-y-6">
               <Card size="sm">
                 <CardHeader>
-                  <CardTitle>Publishing</CardTitle>
+                  <CardTitle className="flex items-center gap-2">
+                    <CalendarClockIcon className="size-4 text-muted-foreground" />
+                    Publishing
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   <PublishDateField />
@@ -317,6 +336,65 @@ function Heading({ isNew }: { isNew: boolean }) {
     <h1 className="truncate text-lg font-semibold tracking-tight">
       {blank && isNew ? `New ${collection.singular.toLowerCase()}` : title}
     </h1>
+  )
+}
+
+/** "Saving…", "Unsaved changes", "All changes saved", with a quick cross-fade between them. */
+function SaveState({
+  pending,
+  uploading,
+  dirty,
+  saved,
+}: {
+  pending: boolean
+  uploading: boolean
+  dirty: boolean
+  saved: boolean
+}) {
+  const state = pending ? "saving" : uploading ? "uploading" : dirty ? "dirty" : saved ? "saved" : null
+  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      {state && (
+        <motion.span
+          key={state}
+          initial={{ opacity: 0, y: 4 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.16 }}
+          className="inline-flex items-center gap-1.5 whitespace-nowrap"
+        >
+          {state === "saving" && (
+            <>
+              <Spinner className="size-3.5" />
+              Saving…
+            </>
+          )}
+          {state === "uploading" && (
+            <>
+              <Spinner className="size-3.5" />
+              Uploading image…
+            </>
+          )}
+          {state === "dirty" && (
+            <>
+              <span className="size-1.5 animate-pulse-dot rounded-full bg-amber-500 text-amber-500" />
+              <span className="font-medium text-amber-700 dark:text-amber-300">Unsaved changes</span>
+              <KbdGroup className="ml-0.5 hidden sm:inline-flex">
+                <Kbd>{mac ? "⌘" : "Ctrl"}</Kbd>
+                <Kbd>S</Kbd>
+              </KbdGroup>
+            </>
+          )}
+          {state === "saved" && (
+            <>
+              <CheckIcon className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+              All changes saved
+            </>
+          )}
+        </motion.span>
+      )}
+    </AnimatePresence>
   )
 }
 

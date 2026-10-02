@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { Fragment, type ReactNode } from "react"
+import { ThemeToggle } from "@/components/theme/theme-toggle"
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,9 +16,9 @@ export type Crumb = { label: string; href?: string }
 
 export function PageHeader({ crumbs, children }: { crumbs: Crumb[]; children?: ReactNode }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-      <SidebarTrigger className="-ml-1" />
-      <Separator orientation="vertical" className="mr-2 data-[orientation=vertical]:h-4" />
+    <header className="glass sticky top-0 z-30 flex h-14 shrink-0 items-center gap-2 border-b border-border/70 px-3 sm:px-4">
+      <SidebarTrigger className="-ml-0.5 text-muted-foreground hover:text-foreground" />
+      <Separator orientation="vertical" className="mr-1.5 data-vertical:h-4 data-vertical:self-center" />
       <Breadcrumb className="min-w-0">
         <BreadcrumbList className="flex-nowrap">
           {crumbs.map((crumb, index) => (
@@ -25,16 +26,21 @@ export function PageHeader({ crumbs, children }: { crumbs: Crumb[]; children?: R
               {index > 0 && <BreadcrumbSeparator className="shrink-0" />}
               <BreadcrumbItem className={index === crumbs.length - 1 ? "min-w-0" : "shrink-0"}>
                 {crumb.href ? (
-                  <BreadcrumbLink render={<Link href={crumb.href} />}>{crumb.label}</BreadcrumbLink>
+                  <BreadcrumbLink render={<Link href={crumb.href} />} className="transition-colors">
+                    {crumb.label}
+                  </BreadcrumbLink>
                 ) : (
-                  <BreadcrumbPage className="truncate">{crumb.label}</BreadcrumbPage>
+                  <BreadcrumbPage className="truncate font-medium">{crumb.label}</BreadcrumbPage>
                 )}
               </BreadcrumbItem>
             </Fragment>
           ))}
         </BreadcrumbList>
       </Breadcrumb>
-      {children && <div className="ml-auto flex shrink-0 items-center gap-2">{children}</div>}
+      <div className="ml-auto flex shrink-0 items-center gap-1.5">
+        {children}
+        <ThemeToggle className="size-8" />
+      </div>
     </header>
   )
 }

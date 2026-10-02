@@ -1,11 +1,11 @@
-import { ButtonLink } from "@/components/button-link"
+import { AuroraBackground } from "@/components/effects/aurora-background"
+import { NotFoundPanel } from "@/components/not-found-panel"
 
 export default function NotFound() {
   return (
-    <main className="flex min-h-svh flex-col items-center justify-center gap-4 p-6 text-center">
-      <p className="text-sm font-medium text-muted-foreground">404</p>
-      <h1 className="text-2xl font-semibold tracking-tight">Page not found</h1>
-      <ButtonLink href="/">Go to the home page</ButtonLink>
+    <main className="relative isolate flex min-h-svh items-center justify-center p-6">
+      <AuroraBackground />
+      <NotFoundPanel title="Page not found" description="The address may be wrong, or the page has moved." />
     </main>
   )
 }

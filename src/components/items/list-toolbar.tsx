@@ -1,8 +1,15 @@
-import { SearchIcon } from "lucide-react"
+"use client"
+
+import { SearchIcon, XIcon } from "lucide-react"
+import { motion } from "motion/react"
 import Form from "next/form"
 import Link from "next/link"
-import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group"
-import type { CollectionConfig, ContentStatus } from "@/config/collections"
+import { useRouter } from "next/navigation"
+import { useEffect, useOptimistic, useRef, useTransition } from "react"
+import { listHref } from "@/components/items/list-href"
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group"
+import { Kbd } from "@/components/ui/kbd"
+import type { ContentStatus } from "@/config/collections"
 import { cn } from "@/lib/utils"
 
 const TABS: { label: string; status?: ContentStatus }[] = [
@@ -11,57 +18,106 @@ const TABS: { label: string; status?: ContentStatus }[] = [
   { label: "Drafts", status: "draft" },
 ]
 
-export function listHref(slug: string, params: { q?: string; status?: ContentStatus; page?: number }) {
-  const search = new URLSearchParams()
-  if (params.q) search.set("q", params.q)
-  if (params.status) search.set("status", params.status)
-  if (params.page && params.page > 1) search.set("page", String(params.page))
-  const qs = search.toString()
-  return qs ? `/${slug}?${qs}` : `/${slug}`
-}
-
 export function ListToolbar({
-  collection,
+  slug,
+  searchPlaceholder,
   q,
   status,
 }: {
-  collection: CollectionConfig
+  slug: string
+  searchPlaceholder: string
   q: string
   status?: ContentStatus
 }) {
+  const router = useRouter()
+  const [, startTransition] = useTransition()
+  // The highlight moves as soon as a tab is clicked, while the new list loads
+  const [activeStatus, setActiveStatus] = useOptimistic(status)
+  const search = useRef<HTMLInputElement>(null)
+
+  // "/" jumps to the search box
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return
+      if (target?.closest("input, textarea, select, [contenteditable=true]")) return
+      e.preventDefault()
+      search.current?.focus()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [])
+
   return (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-      <nav aria-label="Filter by status" className="inline-flex w-fit rounded-lg bg-muted p-1">
+      <nav
+        aria-label="Filter by status"
+        className="isolate inline-flex w-fit gap-0.5 rounded-xl border bg-muted/70 p-1 shadow-[inset_0_1px_2px_oklch(0_0_0/0.04)]"
+      >
         {TABS.map((tab) => {
-          const active = tab.status === status
+          const active = tab.status === activeStatus
+          const href = listHref(slug, { q, status: tab.status })
           return (
             <Link
               key={tab.label}
-              href={listHref(collection.slug, { q, status: tab.status })}
+              href={href}
               aria-current={active ? "page" : undefined}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+                e.preventDefault()
+                startTransition(() => {
+                  setActiveStatus(tab.status)
+                  router.push(href)
+                })
+              }}
               className={cn(
-                "rounded-md px-3 py-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
-                active && "bg-background text-foreground shadow-sm",
+                "relative rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors duration-200 outline-none focus-visible:ring-3 focus-visible:ring-ring/40",
+                active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
             >
+              {active && (
+                <motion.span
+                  layoutId={`status-tab-${slug}`}
+                  transition={{ type: "spring", stiffness: 520, damping: 40 }}
+                  className="absolute inset-0 -z-10 rounded-lg bg-card shadow-sm ring-1 ring-foreground/[0.06] dark:bg-white/10 dark:ring-white/[0.06]"
+                />
+              )}
               {tab.label}
             </Link>
           )
         })}
       </nav>
-      <Form action={`/${collection.slug}`} className="w-full sm:w-72" role="search">
+
+      <Form action={`/${slug}`} className="w-full sm:w-80" role="search">
         {status && <input type="hidden" name="status" value={status} />}
-        <InputGroup>
-          <InputGroupAddon>
+        <InputGroup className="rounded-xl">
+          <InputGroupAddon className="pl-3">
             <SearchIcon />
           </InputGroupAddon>
           <InputGroupInput
+            ref={search}
+            key={q}
             name="q"
             type="search"
             defaultValue={q}
-            placeholder={collection.searchPlaceholder}
+            placeholder={searchPlaceholder}
             aria-label="Search"
+            className="[&::-webkit-search-cancel-button]:hidden"
           />
+          <InputGroupAddon align="inline-end" className="pr-2">
+            {q ? (
+              <InputGroupButton
+                size="icon-xs"
+                aria-label="Clear search"
+                className="rounded-md"
+                onClick={() => router.push(listHref(slug, { status }))}
+              >
+                <XIcon />
+              </InputGroupButton>
+            ) : (
+              <Kbd className="hidden border bg-background sm:inline-flex">/</Kbd>
+            )}
+          </InputGroupAddon>
         </InputGroup>
       </Form>
     </div>

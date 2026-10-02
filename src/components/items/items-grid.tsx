@@ -1,4 +1,5 @@
 import { ImageIcon } from "lucide-react"
+import * as motion from "motion/react-client"
 import Image from "next/image"
 import Link from "next/link"
 import { websiteHref } from "@/components/items/item-text"
@@ -26,8 +27,14 @@ export function ItemsGrid({
         const title = collection.displayTitle(row)
         const url = typeof row.image_url === "string" ? row.image_url : ""
         return (
-          <li key={id} className="overflow-hidden rounded-xl border bg-card">
-            <Link href={`/${collection.slug}/${id}`} className="relative block aspect-[5/7] bg-muted">
+          <motion.li
+            key={id}
+            initial={{ opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1], delay: Math.min(index, 12) * 0.035 }}
+            className="group/tile overflow-hidden rounded-2xl border bg-card shadow-sm transition-[transform,box-shadow] duration-300 ease-out-expo hover:-translate-y-1 hover:shadow-md dark:shadow-[inset_0_1px_0_var(--highlight)]"
+          >
+            <Link href={`/${collection.slug}/${id}`} className="relative block aspect-[5/7] overflow-hidden bg-muted">
               {url ? (
                 <Image
                   src={url}
@@ -35,23 +42,29 @@ export function ItemsGrid({
                   fill
                   loading={index < 4 ? "eager" : "lazy"} // the first row is usually the largest thing on screen
                   sizes="(min-width: 1536px) 16vw, (min-width: 1024px) 22vw, (min-width: 640px) 30vw, 45vw"
-                  className="object-cover object-top"
+                  className="object-cover object-top transition-transform duration-700 ease-out-expo group-hover/tile:scale-[1.04]"
                 />
               ) : (
                 <ImageIcon className="absolute inset-0 m-auto size-6 text-muted-foreground" />
               )}
+              <span className="absolute inset-0 bg-linear-to-t from-black/45 via-black/0 to-transparent opacity-0 transition-opacity duration-300 group-hover/tile:opacity-100" />
+              <StatusBadge
+                status={row.status}
+                publishedAt={row.published_at}
+                className="absolute top-2.5 left-2.5 bg-background/85 shadow-sm backdrop-blur"
+              />
             </Link>
-            <div className="flex items-start gap-1 p-2.5">
-              <div className="min-w-0 flex-1 space-y-1.5">
-                <Link href={`/${collection.slug}/${id}`} className="block truncate text-sm font-medium hover:underline">
+            <div className="flex items-center gap-1 py-2.5 pr-1.5 pl-3">
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={`/${collection.slug}/${id}`}
+                  className="block truncate text-sm font-medium transition-colors hover:text-brand-ink"
+                >
                   {title}
                 </Link>
-                <div className="flex items-center gap-2">
-                  <StatusBadge status={row.status} publishedAt={row.published_at} />
-                  <span className="truncate text-xs text-muted-foreground">
-                    {formatDate(row.published_at as string | null, timeZone)}
-                  </span>
-                </div>
+                <p className="truncate text-xs text-muted-foreground tabular-nums">
+                  {formatDate(row.published_at as string | null, timeZone)}
+                </p>
               </div>
               <RowActions
                 collection={collection.slug}
@@ -61,7 +74,7 @@ export function ItemsGrid({
                 websiteHref={websiteHref(collection, row, websiteUrl)}
               />
             </div>
-          </li>
+          </motion.li>
         )
       })}
     </ul>
