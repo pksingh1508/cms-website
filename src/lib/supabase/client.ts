@@ -1,0 +1,8 @@
+import { createBrowserClient } from "@supabase/ssr"
+import { publicEnv } from "@/lib/public-env"
+import type { Database } from "./database.types"
+
+/** Supabase client for the browser. Only the login form uses it. */
+export function createClient() {
+  return createBrowserClient<Database>(publicEnv.supabaseUrl, publicEnv.supabasePublishableKey)
+}
