@@ -1935,7 +1935,10 @@ The files `src/app/page.tsx` and `public/*.svg` from create-next-app are removed
 | `APP_TIME_ZONE` | server | e.g. `Europe/Warsaw`; used to show dates in lists |
 | `WEBSITE_REVALIDATE_URL` | server, optional | `https://www.example.com/api/revalidate` |
 | `WEBSITE_REVALIDATE_SECRET` | server, optional | A long random string, the same as `CMS_REVALIDATE_SECRET` on the website |
-| `SUPABASE_SECRET_KEY` | **local only** | `sb_secret_…`, only for `scripts/set-password.ts`. **Never set it on Vercel.** |
+| `SUPABASE_SECRET_KEY` | **local only** | `sb_secret_…`, for local scripts: create admin users, `scripts/set-password.ts`, data migration. **Never set it on Vercel.** |
+| `SUPABASE_PROJECT_REF` | **local only** | The project id from the dashboard URL; used by the CLI and the Management API |
+| `SUPABASE_DB_URL`, `SUPABASE_DB_PASSWORD` | **local only** | Session-pooler URI *without* the password, plus the password, for backups (`pg_dump`), migrations and type generation |
+| `SUPABASE_ACCESS_TOKEN` | **local only** | Personal access token for the Supabase CLI / Management API (Data API and Auth settings). Delete it after setup. |
 
 `src/lib/env.ts` validates these with Zod at startup, so a missing variable fails fast with a clear message.
 

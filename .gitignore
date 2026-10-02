@@ -32,6 +32,10 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+.env.local
+
+# data exported from the old Strapi database (contains personal data, never commit)
+/supabase_data/
 
 # vercel
 .vercel
