@@ -5,7 +5,7 @@
 > - Content is saved in **Supabase**, in tables prefixed with `eu_`, and images in **Cloudflare R2**.
 > - The public website reads the published content **directly from Supabase**.
 >
-> **Status:** v3, **built** · **Updated:** 2026-10-03. This document now describes what was built; [§1.4](#14-what-changed-during-the-build) lists how it differs from the plan. What is left to do is in [§16](#16-status--next-steps). Everyday commands are in the [README](README.md).
+> **Status:** v3, **built** · **Updated:** 2026-10-03. This document now describes what was built (the old Strapi tables were deleted on 2026-10-03, [§13](#13-the-old-strapi-content)); [§1.4](#14-what-changed-during-the-build) lists how it differs from the plan. What is left to do is in [§16](#16-status--next-steps). Everyday commands are in the [README](README.md).
 >
 > Earlier versions are in git history: v2, the plan for this CMS (commit `00990f4`), and v1, a general-purpose "Strapi alternative" (commit `1e9e734`).
 
@@ -25,7 +25,7 @@
 10. [CMS screens](#10-cms-screens)
 11. [How the code works](#11-how-the-code-works)
 12. [Using the content on your website](#12-using-the-content-on-your-website)
-13. [Importing the old Strapi content](#13-importing-the-old-strapi-content)
+13. [The old Strapi content](#13-the-old-strapi-content)
 14. [Project structure](#14-project-structure)
 15. [Environment variables & config](#15-environment-variables--config)
 16. [Status & next steps](#16-status--next-steps)
@@ -92,7 +92,7 @@ Every column is listed in [§6.2](#62-fields-per-table).
 | The browser uploads straight to R2 with a presigned URL; `HeadObject` check when saving | The browser uploads to the CMS (`POST /api/uploads`), which checks the admin, the origin, the size and the file's first bytes, then writes to R2 | After resizing, images are small (4 MB cap, under Vercel's 4.5 MB request limit). No bucket CORS rules and no upload URLs are needed, and the server sees every file. |
 | Only replaced main images are deleted; inline images wait for a clean-up tool | Main **and** inline images are deleted as soon as no item uses them (checked across all six tables). Old Strapi files (`uploads/…`) are never deleted. | Fewer leftover files; old files may still be linked from elsewhere |
 | Admins added with SQL in the dashboard; `scripts/set-password.ts` | `pnpm admin add / list / password / remove / delete` | One command instead of dashboard + SQL |
-| — | A `legacy_id` column on every table and `pnpm import:strapi` ([§13](#13-importing-the-old-strapi-content)) | Brings the old content over |
+| — | A `legacy_id` column on every table, and a one-off import of the Strapi content; afterwards the Strapi tables were deleted ([§13](#13-the-old-strapi-content)) | Brings the old content over |
 | Vercel region `fra1` | `dub1` (Dublin) | The Supabase project is in `eu-west-1` (Ireland) |
 | New bucket `cms-media` | The existing bucket `eu-cms-media`, served at `media.eucareerserwis.pl` | Old and new images live side by side |
 | Field types `date`, `rating`, `boolean` | Not needed; a `number` type was added for likes, comments and views | Follows the real fields |
@@ -120,7 +120,7 @@ Every column is listed in [§6.2](#62-fields-per-table).
   - works on phones.
 - **Images:** resized in the browser (EXIF removed), uploaded through the CMS to R2, and deleted once no item uses them.
 - **Database rules (RLS):** the website, or anyone holding the publishable key, can read only **published** content, and only admins can write.
-- **Scripts:** `pnpm admin` to manage admins, and `pnpm import:strapi` to import the old content.
+- **Scripts:** `pnpm admin` to manage admins. A one-off import brought over the old Strapi content ([§13](#13-the-old-strapi-content)).
 - **For your website:** a guide with copy-paste queries ([§12](#12-using-the-content-on-your-website)) and an optional "refresh the website" ping after each save.
 
 ### Not built (see [§20](#20-later-backlog))
@@ -190,7 +190,7 @@ Postgres enforces this; the CMS code only adds friendlier checks on top.
 | Your website / any visitor | publishable key, no login | rows with `status = 'published'` and `published_at <= now()` | nothing |
 | **Admin** (listed in `eu_admins`) | publishable key + their login session | everything, drafts included | the six content tables |
 | A logged-in user **not** in `eu_admins` | publishable key + session | the same as a visitor | nothing |
-| Local scripts (`pnpm admin`, `pnpm import:strapi`) | secret key (`service_role`, bypasses RLS) | everything | the content tables and `eu_admins` |
+| Local scripts (`pnpm admin`) | secret key (`service_role`, bypasses RLS) | everything | the content tables and `eu_admins` |
 | You, in the Supabase dashboard or CLI | database owner | everything | everything |
 
 ### 3.3 Saving an item with an image
@@ -238,7 +238,7 @@ sequenceDiagram
 | D11 | **CMS pages are never cached.** The website does its own caching, refreshed on a timer and by an optional ping. | Admins always see the latest data, and there is nothing to invalidate in the CMS. | — |
 | D12 | **Edit conflicts are caught with `updated_at`:** an update only succeeds if the row hasn't changed since the editor opened it. | Two people (or two tabs) can never silently overwrite each other. | The second person has to reload and redo their change. |
 | D13 | **An image is deleted only when no item uses it any more**, checked across the main images and the rich text of all six tables. Files from Strapi are never deleted. | No broken images, and no pile of unused files. | A few extra count queries after each save, run after the response. |
-| D14 | **The Strapi content is imported once into the `eu_` tables;** the Strapi tables are only read, never changed. | The new tables start with all the old content, and the old site keeps working until you switch. | Importing again would overwrite CMS edits to imported items, so it needs `--overwrite` ([§13](#13-importing-the-old-strapi-content)). |
+| D14 | **The Strapi content was imported once into the `eu_` tables,** then the Strapi tables were deleted (after a backup). | The new tables start with all the old content, and nothing is left that is readable without RLS. | The website must read the `eu_` tables now ([§12](#12-using-the-content-on-your-website)). |
 
 ---
 
@@ -260,7 +260,7 @@ Versions as installed on 2026-10-03.
 | Rich text | Tiptap 3: `react`, `pm`, `starter-kit`, `extension-image`, `extensions`, `extension-file-handler`, `extension-text-style` | 3.31 | MIT licensed |
 | HTML cleaning | sanitize-html | 2.18 | used by the save action and the import |
 | Slugs | @sindresorhus/slugify | 3.0 | transliterates letters such as ł, ą, ü |
-| Scripts | tsx, marked | 4.23 / 18 | `pnpm admin`, `pnpm import:strapi` (marked converts the old Markdown) |
+| Scripts | tsx | 4.23 | `pnpm admin` |
 | Tests | Vitest | 5.0 | |
 | Lint and format | Biome | 2.5 | `next lint` no longer exists |
 | Hosting | Vercel | — | region `dub1` |
@@ -363,8 +363,9 @@ Every content table has these **standard columns**:
 |---|---|
 | `supabase/migrations/20261002200000_eu_content_tables.sql` | the `eu_content_status` type; the `private` schema; the trigger function `private.eu_content_before_write()`; the six tables; on each table an index for the website (`published_at desc` where published), an index for the CMS lists (`updated_at desc`) and the trigger |
 | `supabase/migrations/20261002200100_eu_access_control.sql` | `eu_admins`; `private.eu_is_admin()`; the grants; the RLS policies |
+| `supabase/migrations/20261002203322_drop_strapi_tables.sql` | drops the 42 tables of the old Strapi CMS ([§13.4](#134-removing-the-strapi-tables)) |
 
-- Both were applied to the live project on 2026-10-02 with `supabase db push`; `supabase migration list` shows the local and remote migrations in sync.
+- All three were applied to the live project with `supabase db push` (the first two on 2026-10-02, the third on 2026-10-03); `supabase migration list` shows the local and remote migrations in sync.
 - **The trigger:**
   - on every update, it keeps `created_at` and sets `updated_at = now()`;
   - when an item is published without a date, it sets `published_at = now()`.
@@ -467,7 +468,7 @@ curl "https://<project-ref>.supabase.co/rest/v1/eu_blog?select=title&status=eq.d
 - The trigger stamps `published_at`, moves `updated_at` and protects `created_at`.
 - A stale `updated_at` matches 0 rows, which is the edit-conflict check.
 - A duplicate slug gives `23505`, a malformed slug gives `23514`, and a visa stamp without an image is rejected.
-- **Security Advisor:** no findings for `eu_` objects. Its 42 errors ("RLS disabled") are all on the old Strapi tables ([§16.2](#162-before-go-live)).
+- **Security Advisor (2026-10-03):** no errors. The 42 "RLS disabled" errors on the old Strapi tables disappeared when those tables were deleted. One optional warning remains: leaked-password protection is off (Authentication → Attack Protection, on paid plans).
 
 ### 6.7 Changing the schema later
 
@@ -1165,19 +1166,16 @@ export async function POST(request: Request) {
 
 ---
 
-## 13. Importing the old Strapi content
+## 13. The old Strapi content
 
-`pnpm import:strapi` (`scripts/import-strapi.ts`, helpers in `scripts/lib/strapi-transform.ts`) copies the content of the old Strapi tables, which live in the same Supabase project, into the `eu_` tables.
+The content of the old Strapi CMS, whose tables lived in the same Supabase project, was copied into the `eu_` tables on 2026-10-02 by a one-off script, and the Strapi tables were deleted on 2026-10-03 ([§13.4](#134-removing-the-strapi-tables)). The script (`scripts/import-strapi.ts`, with `scripts/lib/strapi-transform.ts` and its tests) was removed with them; it is in git history (commit `64a0e94`).
 
-### 13.1 How it works
+### 13.1 How the import worked
 
-- It **only reads** the Strapi tables and never changes them. Images stay where they are in R2.
-- It runs locally with the secret key. `--dry-run` shows what would be imported without writing anything.
-- Strapi keeps a draft row and a published row for each item. The script takes the **published** version, or the draft if the item was never published (it then becomes a draft in the CMS).
-- **Dates:** `published_at` is the item's original creation date (Strapi reset its own publish date every time an item was re-published); `created_at` and `updated_at` come from Strapi.
-- **`legacy_id`** stores the Strapi document id. Importing again matches on it and updates those items.
-
-> **Importing again replaces the imported items with the Strapi version,** including any changes made to them in the CMS (and their status). The script therefore stops when imported items already exist; `--overwrite` makes it go ahead. Items created in the CMS are never touched.
+- It **only read** the Strapi tables. Images stayed where they are in R2.
+- Strapi keeps a draft row and a published row for each item. The script took the **published** version, or the draft if the item was never published (it then became a draft in the CMS).
+- **Dates:** `published_at` is the item's original creation date (Strapi reset its own publish date every time an item was re-published); `created_at` and `updated_at` came from Strapi.
+- **`legacy_id`** stores the Strapi document id of every imported item.
 
 ### 13.2 What goes where
 
@@ -1190,7 +1188,7 @@ export async function POST(request: Request) {
 | `visa_stamps` | `eu_visa_stamps` | the image (alt text "Visa stamp") |
 | `work_permits` | `eu_work_permits` | the image; `country` from the Strapi media folder (Serbia, Slovakia), otherwise Poland. Items that repeat another permit's image are skipped. |
 
-Images are found through Strapi's `files` and `files_related_mph` tables. They keep their URL (`https://media.eucareerserwis.pl/uploads/…`), their alt text when Strapi had one, and their width and height.
+Images were found through Strapi's `files` and `files_related_mph` tables. They keep their URL (`https://media.eucareerserwis.pl/uploads/…`), their alt text when Strapi had one, and their width and height.
 
 ### 13.3 Result
 
@@ -1215,6 +1213,20 @@ The import ran on 2026-10-02:
   - blog `␣gulf-to-europe-migration-2026-work-permit-uae-saudi-qatar` → without the leading space;
   - blog `␣fastest-work-permit-poland-europe-2026-eu-career-serwis` → without the leading space.
 
+### 13.4 Removing the Strapi tables
+
+On 2026-10-03 the 42 tables Strapi had created in `public` were dropped by the migration `supabase/migrations/20261002203322_drop_strapi_tables.sql`: one `drop table if exists …` listing them by name, without `cascade`. Their id sequences went with them; Strapi had left no views, functions or types.
+
+Before that:
+- **Nothing was using them.** No Strapi server was connected to the database, and its API (`api.eucareerserwis.pl`) was already offline (Cloudflare error 522). The website's blog, news and testimonial pages, which still call that API, were already failing with HTTP 500.
+- **A full backup** of the `public` schema (the Strapi tables and the `eu_` tables) was taken: `supabase_data/backups/before-strapi-drop-20261003-020213.dump` (git-ignored, private: it contains personal data). A test restore into a scratch database brought back all 42 tables with their rows.
+
+Afterwards the `public` schema holds only the 7 `eu_` tables, their row counts were unchanged, the generated types were regenerated (`pnpm db:types`), and the Security Advisor shows no errors.
+
+To bring a Strapi table back, restore it from the backup, e.g. `pg_restore --table=blogs --no-owner -d "<database URL>" supabase_data/backups/before-strapi-drop-20261003-020213.dump` (into a scratch database first, never straight into production).
+
+> **If the old Strapi server is ever started again, it re-creates its (empty) tables on start-up.** Keep it switched off, and reset the database password it used ([§16.2](#162-before-go-live)).
+
 ---
 
 ## 14. Project structure
@@ -1227,14 +1239,13 @@ The import ran on 2026-10-02:
 ├── .env.example                        # template for .env.local
 ├── .nvmrc                              # 24
 ├── scripts/                            # local only, use the secret key
-│   ├── admin.ts                        # pnpm admin add|list|password|remove|delete
-│   ├── import-strapi.ts                # pnpm import:strapi [--dry-run | --overwrite]
-│   └── lib/strapi-transform.ts         # dates, slugs, tags, Markdown → HTML
+│   └── admin.ts                        # pnpm admin add|list|password|remove|delete
 ├── supabase/
 │   ├── config.toml                     # from `supabase init`
 │   └── migrations/
 │       ├── 20261002200000_eu_content_tables.sql
-│       └── 20261002200100_eu_access_control.sql
+│       ├── 20261002200100_eu_access_control.sql
+│       └── 20261002203322_drop_strapi_tables.sql
 ├── src/
 │   ├── proxy.ts                        # session refresh + send guests to /login
 │   ├── app/
@@ -1281,7 +1292,7 @@ The import ran on 2026-10-02:
 │       ├── uploads.ts                  # upload size and type limits
 │       ├── images/{prepare.ts, upload.ts}  # browser-only
 │       ├── slug.ts · dates.ts · html.ts · action-result.ts · utils.ts
-└── tests/                              # Vitest: schemas, sanitize, content helpers, Strapi transforms
+└── tests/                              # Vitest: schemas, sanitize, content helpers
 ```
 
 ---
@@ -1303,7 +1314,7 @@ The import ran on 2026-10-02:
 | `APP_TIME_ZONE` | Vercel + local | `Europe/Warsaw`; used to show dates |
 | `WEBSITE_REVALIDATE_URL` | Vercel, optional | `https://www.eucareerserwis.pl/api/revalidate` |
 | `WEBSITE_REVALIDATE_SECRET` | Vercel, optional | A long random string, the same as `CMS_REVALIDATE_SECRET` on the website |
-| `SUPABASE_SECRET_KEY` | **local only** | `sb_secret_…`, for `pnpm admin` and `pnpm import:strapi`. **Never set it on Vercel.** |
+| `SUPABASE_SECRET_KEY` | **local only** | `sb_secret_…`, for `pnpm admin`. **Never set it on Vercel.** |
 | `SUPABASE_PROJECT_REF` | **local only** | The project id from the dashboard URL |
 | `SUPABASE_DB_URL`, `SUPABASE_DB_PASSWORD` | **local only** | Session-pooler URI *without* the password, plus the password: for `db push` and backups |
 | `SUPABASE_ACCESS_TOKEN` | **local only** | Personal access token for the CLI and the Management API. It can reach every project in your account: revoke it when the setup is finished. |
@@ -1334,7 +1345,6 @@ Server Action bodies are limited to 1 MB by default, which is plenty: images go 
 | `db:new` / `db:push` | `supabase migration new` / `supabase db push` |
 | `db:types` | `supabase gen types typescript --linked --schema public > src/lib/supabase/database.types.ts` |
 | `admin` | `tsx --env-file=.env.local scripts/admin.ts` |
-| `import:strapi` | `tsx --env-file=.env.local scripts/import-strapi.ts` |
 
 ---
 
@@ -1349,16 +1359,17 @@ Server Action bodies are limited to 1 MB by default, which is plenty: images go 
 - [x] **Phase 4, editor:** every field type, draft vs publish validation, conflicts, slug errors, unsaved-changes warning, Ctrl/⌘ + S.
 - [x] **Phase 5, images:** browser resizing, the upload route, image field, thumbnails, deleting unused images.
 - [x] **Phase 6, rich text:** Tiptap editor with links and images, server-side sanitizing.
-- [x] **Strapi import:** all content copied into the `eu_` tables ([§13](#13-importing-the-old-strapi-content)).
-- [x] **Checks:** lint, typecheck, 36 unit tests and the production build pass.
+- [x] **Strapi import:** all content copied into the `eu_` tables ([§13](#13-the-old-strapi-content)).
+- [x] **Strapi tables deleted** on 2026-10-03, after a backup ([§13.4](#134-removing-the-strapi-tables)).
+- [x] **Look and feel:** brand theme, light and dark mode, animations ([§10.3](#103-layout-app-shell)).
+- [x] **Your admin account** exists.
+- [x] **Checks:** lint, typecheck, 27 unit tests and the production build pass.
 
 ### 16.2 Before go-live
 
-1. **Create your admin:** `pnpm admin add <your email>`. No admin exists right now; the test accounts were deleted.
-2. **Switch the website to the `eu_` tables** ([§12](#12-using-the-content-on-your-website)), with the old-address redirect, and deploy it.
-3. **Delete the old Strapi tables** (or turn on RLS for them) **before the CMS is reachable on the internet.** Today they have RLS switched off, so anyone with the publishable key can read and change them, and the CMS's login page makes that key public. They include Strapi's admin accounts (with password hashes) and its API tokens. A backup exists ([§18](#18-deployment--operations)). Afterwards:
-   - run `pnpm db:types`, so the generated types only contain the `eu_` tables;
-   - check that the Security Advisor is clean.
+1. **Switch the website to the `eu_` tables** ([§12](#12-using-the-content-on-your-website)), with the old-address redirect, and deploy it. **This is urgent:** the website's blog, news and testimonial pages still call the old Strapi API, which is offline, so they show no content right now.
+2. **Retire Strapi for good:** keep the old Strapi server switched off (if it starts again, it re-creates its empty tables), and reset the database password it used (Project Settings → Database), then update `SUPABASE_DB_PASSWORD` in `.env.local`.
+3. **Optional:** turn on leaked-password protection (Authentication → Attack Protection; paid plans), the Security Advisor's last warning.
 4. **Cloudflare:** add the Cache Rule and the `nosniff` header for `media.eucareerserwis.pl` ([§8.1](#81-cloudflare-setup)).
 5. **Deploy the CMS on Vercel** ([§18](#18-deployment--operations)), then set the Supabase **Site URL** to its address.
 6. **Content:** re-enter the tags of 3 blog posts, and add cover images to the 2 blog drafts before publishing them ([§13.3](#133-result)).
@@ -1390,7 +1401,7 @@ Server Action bodies are limited to 1 MB by default, which is plenty: images go 
 
 | Layer | Tool | Covers |
 |---|---|---|
-| Unit | Vitest (`pnpm test`, 36 tests) | `buildSchema` in draft and publish mode; value ↔ row mapping; `sanitizeRichText` (scripts, event handlers, `javascript:` links, foreign images, styles); slugs; media URL and R2 key checks; images found in HTML; the Strapi transforms (dates, slugs, tags, Markdown) |
+| Unit | Vitest (`pnpm test`, 27 tests) | `buildSchema` in draft and publish mode; value ↔ row mapping; `sanitizeRichText` (scripts, event handlers, `javascript:` links, foreign images, styles); slugs; media URL and R2 key checks; images found in HTML |
 | Database | SQL and API checks ([§6.6](#66-checking-the-rules)) on the live project | visitors see only published, already-live rows; visitors and non-admins can't write; admins can do everything; the trigger; conflicts; constraints |
 | Browser | A scripted run-through with Chrome (Playwright, not kept in the repo), desktop and phone sizes | see below |
 | Manual | Release checklist | upload from an iPhone, an Android phone, desktop Safari (JPEG fallback) and desktop Chrome (WebP); try a HEIC file in Chrome to see the friendly error; the website renders the content |
@@ -1432,7 +1443,7 @@ Server Action bodies are limited to 1 MB by default, which is plenty: images go 
   | **Vercel** | Hobby is for non-commercial use only | **Pro, $20/month per member** |
 
 - **Backups:**
-  - A full dump taken before the build (Strapi tables included) is in `supabase_data/backups/strapi-public-20261002-232100.dump`. It is git-ignored and contains personal data; keep it private.
+  - Two full dumps of the `public` schema are in `supabase_data/backups/`: `strapi-public-20261002-232100.dump` (before the build) and `before-strapi-drop-20261003-020213.dump` (just before the Strapi tables were deleted). They are git-ignored and contain personal data; keep them private.
   - On Supabase Pro, daily backups are automatic. On Free, take one regularly (pg_dump 17 or newer):
 
     ```bash
@@ -1456,7 +1467,8 @@ Server Action bodies are limited to 1 MB by default, which is plenty: images go 
   - RLS is on for every table;
   - explicit grants are in place (`anon` = SELECT only);
   - the policies have been checked on the live project.
-- [ ] **Old Strapi tables:** deleted, or RLS turned on ([§16.2](#162-before-go-live)). Then the Security Advisor is clean.
+- [x] **Old Strapi tables:** deleted on 2026-10-03 ([§13.4](#134-removing-the-strapi-tables)); the Security Advisor shows no errors.
+- [ ] **Old Strapi server:** switched off for good, and the database password it used has been reset.
 - [x] **Keys:**
   - only the publishable key is used by the CMS and the website;
   - the secret key stays in `.env.local` and never reaches Vercel or the browser;

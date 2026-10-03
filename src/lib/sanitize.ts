@@ -2,7 +2,7 @@ import sanitizeHtml from "sanitize-html"
 import { MEDIA_URL } from "@/lib/media"
 
 // Everything the browser sends is untrusted. Rich text is cleaned against an allowlist before it is
-// stored, so the public website can render it as-is. (Also used by the Strapi import script.)
+// stored, so the public website can render it as-is.
 
 // The trailing slash also blocks look-alikes such as media.example.com.evil.com or media.example.com@evil.com
 const MEDIA_PREFIX = `${MEDIA_URL}/`

@@ -13,8 +13,7 @@
     "db:new": "supabase migration new",
     "db:push": "supabase db push",
     "db:types": "supabase gen types typescript --linked --schema public > src/lib/supabase/database.types.ts",
-    "admin": "tsx --env-file=.env.local scripts/admin.ts",
-    "import:strapi": "tsx --env-file=.env.local scripts/import-strapi.ts"
+    "admin": "tsx --env-file=.env.local scripts/admin.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1145.0",
@@ -54,7 +53,6 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/sanitize-html": "^2.16.2",
-    "marked": "^18.0.14",
     "supabase": "^2.119.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.15",

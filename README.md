@@ -86,14 +86,13 @@ pnpm db:types                               # regenerates src/lib/supabase/datab
 To add a field: add the column in a new migration, run `pnpm db:push && pnpm db:types`, then add one line to
 `src/config/collections.ts`.
 
-### Importing the old Strapi content
+### The old Strapi content
 
-`pnpm import:strapi` copies the content of the old Strapi tables (in the same Supabase project) into the `eu_` tables.
-It only reads the Strapi tables and keeps images where they are in R2. Use `--dry-run` to preview.
-
-The import already ran on 2026-10-02 (results and follow-ups: [`plan.md` §13](plan.md#13-importing-the-old-strapi-content)).
-Running it again stops, because it would replace the imported items (matched on `legacy_id`) with the Strapi version,
-including any changes made to them in the CMS. Add `--overwrite` if that is really what you want.
+The content of the old Strapi CMS was imported into the `eu_` tables on 2026-10-02 (results and follow-ups:
+[`plan.md` §13](plan.md#13-the-old-strapi-content)). Its tables were then deleted on 2026-10-03 by the migration
+`supabase/migrations/20261002203322_drop_strapi_tables.sql`. A backup taken just before is in `supabase_data/backups/`
+(git-ignored; it contains personal data, so keep it private). The one-off import script is in git history
+(commit `64a0e94`).
 
 ## Images
 
@@ -112,7 +111,8 @@ Strapi CMS (`uploads/…`) are never deleted by the CMS.
 | `pnpm typecheck`    | TypeScript                                      |
 | `pnpm test`         | unit tests (Vitest)                             |
 | `pnpm admin …`      | manage CMS admins                               |
-| `pnpm import:strapi`| import the old Strapi content                   |
+| `pnpm db:push`      | apply new database migrations                   |
+| `pnpm db:types`     | regenerate the database types                   |
 
 ## Deploying (Vercel)
 
@@ -122,7 +122,3 @@ Strapi CMS (`uploads/…`) are never deleted by the CMS.
    `R2_BUCKET`, `R2_JURISDICTION`, `APP_TIME_ZONE` (and optionally `WEBSITE_REVALIDATE_URL` / `WEBSITE_REVALIDATE_SECRET`).
    **Do not** add `SUPABASE_SECRET_KEY`, `SUPABASE_DB_*` or `SUPABASE_ACCESS_TOKEN`.
 3. In Supabase → Authentication → URL Configuration, set the Site URL to the CMS address.
-
-> **Before the CMS is reachable on the internet, delete the old Strapi tables** (or turn on RLS for them). The
-> publishable key is visible to anyone who opens the login page, and the old Strapi tables are currently readable and
-> writable with it.
